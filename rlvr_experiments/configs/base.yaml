@@ -8,6 +8,7 @@ rlvr:
   prepared_dir: ${oc.env:RLVR_PREPARED_DIR}
   prepared_eval_dir: ${oc.env:RLVR_PREPARED_EVAL_DIR}
   source_root: ${oc.env:RLVR_SOURCE_ROOT}
+  evaluation_source_root: ${oc.env:RLVR_EVALUATION_SOURCE_ROOT}
   contracts_dir: ${rlvr.project_dir}/contracts
   manifest_path: ${rlvr.prepared_dir}/train_plan.json
   data_manifest_path: ${rlvr.prepared_dir}/manifest.json

@@ -13,6 +13,10 @@ def load_paths(profile=None,config_file=None):
     root=PurePosixPath('/home/nlp/data/lyl/verl/rlvr_experiments') if remote_preview else PROJECT_ROOT
     result={'profile':profile,'project_dir':root}
     for key,value in raw.items():
+        if key=='evaluation_status':
+            if value not in ('active','retired'):raise ValueError(f'Invalid evaluation status: {value}')
+            result[key]=value
+            continue
         if value is None:result[key]=None;continue
         for previous,resolved in result.items():
             value=value.replace('${'+previous+'}',str(resolved))

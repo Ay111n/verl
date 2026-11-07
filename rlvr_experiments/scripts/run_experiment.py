@@ -26,9 +26,19 @@ def main():
     a.add_argument('--experiment',required=True,choices=['R0'])
     a.add_argument('--run-dir',required=True);a.add_argument('--gpus',type=int,nargs=2,default=[6,7])
     a.add_argument('--profile',choices=['local','server']);a.add_argument('--validate',action='store_true');a.add_argument('--execute',action='store_true')
+    a.add_argument('--validate-data',action='store_true',help='Read-only frozen data and path checks, including retired historical inputs')
     v=a.parse_args();paths=load_paths(v.profile);os.environ['RLVR_PATH_PROFILE']=paths['profile']
+    if v.validate_data and (v.validate or v.execute):a.error('--validate-data is separate from execution validation')
     args=command(v.experiment,v.run_dir,v.gpus,paths['profile']);status=readiness(paths)
     print(json.dumps({'experiment_id':v.experiment,'argv':args,'readiness':status,'starts_training':False},ensure_ascii=False,indent=2))
+    if v.validate_data:
+        from rlvr.launch import compose_config,validate_algorithm,verify_data
+        cfg=compose_config('reward_dev',[])
+        validate_algorithm(cfg)
+        report=verify_data(cfg)
+        report.update(evaluation_status=paths.get('evaluation_status','active'),read_only=True)
+        print(json.dumps({'data_validation':report},ensure_ascii=False,indent=2))
+        return 0
     if v.validate or v.execute:
         if not status['ready']:return 2
         from rlvr.launch import compose_config,validate_algorithm,verify_data

@@ -4,26 +4,28 @@
     "local": {
       "benchmark_root": "../../benchmark",
       "finetuning_root": "../../finetuning",
-      "source_root": "${finetuning_root}/rl/processed_data",
-      "prepared_dir": "${finetuning_root}/rl/prepared_data/rlvr",
+      "source_root": "${finetuning_root}/rl/archive/retired_splits_20261022_221449/processed_data",
+      "prepared_dir": "${finetuning_root}/rl/archive/rlvr_prepared_20261107",
       "contracts_dir": "contracts",
       "run_root": "runs",
       "model_path": null,
       "python": null,
-      "evaluation_source_root": "${benchmark_root}/eval/inputs/rlvr/processed_data",
-      "prepared_eval_dir": "${benchmark_root}/eval/inputs/rlvr_prepared"
+      "evaluation_source_root": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/processed_data",
+      "prepared_eval_dir": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/prepared",
+      "evaluation_status": "retired"
     },
     "server": {
-      "benchmark_root": null,
-      "finetuning_root": null,
+      "benchmark_root": "/home/nlp/data/lyl/benchmark",
+      "finetuning_root": "/home/nlp/data/lyl/finetuning",
       "source_root": "data/source",
       "prepared_dir": "data/prepared",
       "contracts_dir": "contracts",
       "run_root": "runs",
       "model_path": "/home/nlp/data/lyl/model/qwen3-8bbo-sft-new2-mixed-checkpoint6000-merged",
       "python": "/opt/anaconda3/envs/inference/bin/python",
-      "evaluation_source_root": null,
-      "prepared_eval_dir": null
+      "evaluation_source_root": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/processed_data",
+      "prepared_eval_dir": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/prepared",
+      "evaluation_status": "retired"
     }
   }
 }

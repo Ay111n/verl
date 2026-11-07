@@ -71,6 +71,9 @@ def compose_config(name, overrides):
     paths=load_paths()
     os.environ['RLVR_PROJECT_DIR']=ROOT.as_posix()
     os.environ['RLVR_SOURCE_ROOT']=paths['source_root'].as_posix()
+    if paths.get('evaluation_source_root') is None:
+        raise ValueError('Configure evaluation_source_root for this machine profile')
+    os.environ['RLVR_EVALUATION_SOURCE_ROOT']=paths['evaluation_source_root'].as_posix()
     for key in ('prepared_dir', 'prepared_eval_dir'):
         if paths.get(key) is None: raise ValueError(f'Configure {key} for this machine profile')
         os.environ['RLVR_' + key.upper()] = str(paths[key])
@@ -130,22 +133,33 @@ def validate_algorithm(config):
 def verify_data(config):
     manifest = json.loads(Path(config.rlvr.data_manifest_path).read_text())
     for filename, expected in manifest['source_files'].items():
-        source_root=Path(config.rlvr.source_root)
+        source_root=Path(config.rlvr.evaluation_source_root if filename in {'rl_validation.jsonl','reward_dev/reward_dev_eval.jsonl'} else config.rlvr.source_root)
         if sha256_file(source_root / filename) != expected:
             raise ValueError(f'Frozen source changed: {filename}')
-    by_path = {str(Path(value['path']).resolve()): value for value in manifest['roles'].values()}
+    # Frozen manifests retain original paths; current roots determine the runtime location.
+    by_path = {}
+    for role,value in manifest['roles'].items():
+        root=Path(config.rlvr.prepared_eval_dir if role in {'reward_dev_eval','formal_validation','smoke_eval'} else config.rlvr.prepared_dir)
+        filename=Path(value['path'].replace('\\','/')).name
+        if filename != role+'.parquet':
+            raise ValueError(f'Unexpected prepared role filename: {role}')
+        by_path[str((root/filename).resolve())]=value
     for file in [*config.data.train_files, *config.data.val_files]:
         path = str(Path(file).resolve())
         if path not in by_path or sha256_file(path) != by_path[path]['sha256']:
             raise ValueError(f'Prepared data differs from its verified manifest: {path}')
-    plans = {str(Path(value['path']).resolve()): value for value in manifest['plans'].values()}
+    plans = {str((Path(config.rlvr.prepared_dir)/Path(value['path'].replace('\\','/')).name).resolve()): value for value in manifest['plans'].values()}
     path = str(Path(config.rlvr.manifest_path).resolve())
     if path not in plans or sha256_file(path) != plans[path]['sha256']:
         raise ValueError('Training plan differs from frozen data manifest')
+    return {'source_files':len(manifest['source_files']), 'prepared_files':len(config.data.train_files)+len(config.data.val_files),
+            'training_plan_sha256':plans[path]['sha256']}
 
 
 def run(args):
     paths=load_paths()
+    if paths.get('evaluation_status')=='retired':
+        raise ValueError('Evaluation splits are retired; use scripts/run_experiment.py --validate-data for historical CPU checks')
     expected_python=paths['python']
     if expected_python is None or Path(sys.executable).resolve() != expected_python.resolve():
         raise ValueError('Use the selected inference conda interpreter for experiment execution')
@@ -302,6 +316,8 @@ def main():
     args.evaluation_source_root=args.evaluation_source_root or paths.get('evaluation_source_root')
     args.prepared_eval_dir=args.prepared_eval_dir or paths.get('prepared_eval_dir')
     if args.prepare_data:
+        if paths.get('evaluation_status')=='retired':
+            raise ValueError('Retired evaluation inputs support read-only validation only')
         from rlvr.data import prepare_data
         print(json.dumps(prepare_data(args.source_root, args.prepared_dir, evaluation_source_root=args.evaluation_source_root, evaluation_output_root=args.prepared_eval_dir), ensure_ascii=False, default=str))
     elif args.verify_model:

@@ -1,4 +1,4 @@
-"""CPU-only checks of direct-start policy and committed-prefix qualification."""
+"""CPU checks of the current policy and explicitly scoped historical prefix rules."""
 import json
 from pathlib import Path
 import tempfile
@@ -32,12 +32,14 @@ class DirectR0Tests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_direct_start(config(), resume, gate)
 
-    def test_measurement_counts_and_no_early_or_late_gate(self):
-        labels = [measurement_label(step) for step in range(1, 15)]
+    def test_current_measurements_and_disabled_prefix_gate(self):
+        labels = [measurement_label(step) for step in range(1, 51)]
         self.assertEqual(labels.count("warmup"), 1)
-        self.assertEqual(labels.count("diagnostic"), 3)
-        self.assertEqual(labels.count("steady"), 10)
-        for step in (1, 4, 13, 15, 50):
+        self.assertEqual(labels.count("diagnostic"), 0)
+        self.assertEqual(labels.count("steady"), 49)
+        self.assertIsNone(POLICY['decision_after_update'])
+        self.assertIsNone(POLICY['stop_before_update'])
+        for step in range(1, 51):
             self.assertIsNone(qualify_committed_prefix("nonexistent", step))
 
     def test_live_snapshot_excludes_only_incomplete_last_line(self):
@@ -51,6 +53,12 @@ class DirectR0Tests(unittest.TestCase):
                 _snapshot_jsonl(source, output)
 
     def fixture(self, directory):
+        # Exercise the retained historical verifier under its original prefix policy.
+        self.enterContext(mock.patch.dict(POLICY, {
+            'mode': 'historical_prefix_cpu_fixture', 'warmup_updates': [1],
+            'diagnostic_updates': [2, 3, 4], 'steady_updates': list(range(5, 15)),
+            'decision_after_update': 14, 'stop_before_update': 15,
+        }))
         plan = directory/"plan.json"
         plan.write_text('{"test": "synthetic CPU fixture"}')
         candidate = config()
@@ -81,7 +89,7 @@ class DirectR0Tests(unittest.TestCase):
             self.assertEqual(len(gate.call_args.args[0]), 14)
             return result
 
-    def test_bound_prefix_pass_records_actual_phase_and_hashes(self):
+    def test_historical_prefix_pass_records_phase_and_hashes(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
             self.fixture(directory)
@@ -92,7 +100,7 @@ class DirectR0Tests(unittest.TestCase):
             self.assertEqual(len(report["raw_snapshot_sha256"]), 2)
             self.assertEqual(json.loads((directory/"hardware_gate.json").read_text()), report)
 
-    def test_failed_or_unknown_hardware_decision_stops(self):
+    def test_historical_failed_or_unknown_hardware_decision_stops(self):
         for decision in ("technically_runs_only", "insufficient_evidence"):
             with tempfile.TemporaryDirectory() as folder:
                 directory = Path(folder)
@@ -101,7 +109,7 @@ class DirectR0Tests(unittest.TestCase):
                     self.evaluate(directory, decision)
                 self.assertEqual(json.loads((directory/"hardware_gate.json").read_text())["decision"], decision)
 
-    def test_corrupt_rank_manifest_label_or_duplicate_commit_stops(self):
+    def test_historical_corrupt_rank_manifest_label_or_duplicate_commit_stops(self):
         for fault in ("rank", "manifest", "measurement", "duplicate"):
             with tempfile.TemporaryDirectory() as folder:
                 directory = Path(folder)
@@ -115,7 +123,7 @@ class DirectR0Tests(unittest.TestCase):
                     self.evaluate(directory)
                 self.assertEqual(json.loads((directory/"hardware_gate.json").read_text())["decision"], "insufficient_evidence")
 
-    def test_source_change_stops_and_gate_is_not_called(self):
+    def test_historical_source_change_stops_and_gate_is_not_called(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
             self.fixture(directory)

@@ -14,6 +14,8 @@ def readiness(paths=None):
               c/'execution/reference.json',d/'manifest.json',d/'train_plan.json',
               d/'reward_dev_train.parquet',e/'reward_dev_eval.parquet']
     missing=[str(x) for x in required if not x.is_file()]
+    if p.get('evaluation_status')=='retired':
+        missing.append('Evaluation splits are retired; only historical --validate-data checks are enabled')
     from rlvr.contracts import FROZEN_HASHES
     for name in FROZEN_HASHES:
         source=p['evaluation_source_root'] if name in {'rl_validation.jsonl','reward_dev/reward_dev_eval.jsonl'} else p['source_root']
