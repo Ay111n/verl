@@ -1,0 +1,13 @@
+defaults:
+  - base
+  - _self_
+
+rlvr:
+  phase: formal_16k
+  manifest_path: ${rlvr.prepared_dir}/formal_train_plan.json
+  train_updates: null
+  strict_exposure: true
+
+data:
+  train_files: ["${rlvr.prepared_dir}/formal_train.parquet"]
+  val_files: ["${rlvr.prepared_eval_dir}/formal_validation.parquet"]

@@ -1,0 +1,12 @@
+experiment_id: R0
+backend_reward_profile: R0
+reward_definition: correctness
+adapter_seed: 20261008
+rollout_base_seed: 42
+updates: 50
+lora_rank: 32
+lora_alpha: 64
+tensor_parallel_size: 1
+data_parallel_size: 2
+execution_contract: contracts/execution/reference.json
+hardware_profile: configs/hardware/dual_l20_tp1_dp2.yaml

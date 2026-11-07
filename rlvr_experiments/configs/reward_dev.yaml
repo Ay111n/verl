@@ -1,0 +1,8 @@
+defaults:
+  - base
+  - _self_
+
+rlvr:
+  phase: reward_dev
+  train_updates: 50
+  strict_exposure: true

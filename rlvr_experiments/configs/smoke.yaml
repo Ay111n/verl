@@ -1,0 +1,16 @@
+defaults:
+  - base
+  - _self_
+
+rlvr:
+  phase: smoke
+  manifest_path: ${rlvr.prepared_dir}/smoke_train_plan.json
+  train_updates: 2
+  strict_exposure: false
+
+data:
+  train_files: ["${rlvr.prepared_dir}/smoke_train.parquet"]
+  val_files: ["${rlvr.prepared_eval_dir}/smoke_eval.parquet"]
+
+trainer:
+  total_epochs: 3

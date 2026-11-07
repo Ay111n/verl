@@ -1,0 +1,29 @@
+{
+  "schema": "rlvr-paths-v1",
+  "profiles": {
+    "local": {
+      "benchmark_root": "../../benchmark",
+      "finetuning_root": "../../finetuning",
+      "source_root": "${finetuning_root}/rl/processed_data",
+      "prepared_dir": "${finetuning_root}/rl/prepared_data/rlvr",
+      "contracts_dir": "contracts",
+      "run_root": "runs",
+      "model_path": null,
+      "python": null,
+      "evaluation_source_root": "${benchmark_root}/eval/inputs/rlvr/processed_data",
+      "prepared_eval_dir": "${benchmark_root}/eval/inputs/rlvr_prepared"
+    },
+    "server": {
+      "benchmark_root": null,
+      "finetuning_root": null,
+      "source_root": "data/source",
+      "prepared_dir": "data/prepared",
+      "contracts_dir": "contracts",
+      "run_root": "runs",
+      "model_path": "/home/nlp/data/lyl/model/qwen3-8bbo-sft-new2-mixed-checkpoint6000-merged",
+      "python": "/opt/anaconda3/envs/inference/bin/python",
+      "evaluation_source_root": null,
+      "prepared_eval_dir": null
+    }
+  }
+}

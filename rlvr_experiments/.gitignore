@@ -1,0 +1,11 @@
+.venv/
+.cache/
+data/
+runs/
+__pycache__/
+.pytest_cache/
+*.pyc
+new_runs/
+results/
+provenance/*.tar.gz
+provenance/normalization/*files*.json

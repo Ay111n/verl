@@ -1,0 +1,19 @@
+# Preserve the existing model backend; install the missing training toolchain.
+ray[default]==2.55.1
+TransferQueue==0.1.10
+hydra-core==1.3.2
+omegaconf==2.3.0
+datasets==4.8.5
+fsspec==2026.2.0
+packaging==25.0
+tensordict==0.10.0
+codetiming
+torchdata
+mathruler
+wandb
+tensorboard
+pytest
+pytest-asyncio
+pylatexenc
+nvtx
+pybind11
