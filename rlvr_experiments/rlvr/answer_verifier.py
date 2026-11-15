@@ -178,7 +178,19 @@ def extract_numeric(final: str, policy: dict[str, Any]) -> dict[str, Any]:
         text = surface(final)
         boxes = _boxes(text)
         regions = _regions(text)
-        parts = boxes + regions if boxes or regions else [text]
+        terminal = []
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            last = lines[-1]
+            literal = last.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
+            literal = literal.strip(" *\x60$").rstrip("。།༎")
+            try:
+                rational(_latex(literal), policy)
+                terminal = [last]
+            except (ValueError, InvalidOperation, ZeroDivisionError, OverflowError):
+                if re.match(r"^(?:[*#\s]*)(?:དེས་ན|དེ་ལྟར|དེར་བརྟེན|དེའི་ཕྱིར|Therefore\b|Thus\b|Hence\b)", last, re.IGNORECASE):
+                    terminal = [last]
+        parts = boxes + regions + terminal if boxes or regions or terminal else [text]
         values = []
         for part in parts:
             values.extend(_numeric_values(part, policy))

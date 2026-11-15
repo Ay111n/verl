@@ -158,3 +158,19 @@ def test_terminal_option_label_after_explanation(answer,gold):
 def test_terminal_label_cannot_override_explicit_conflicting_answer():
     result=run("Final answer: A.\n\nB","B","knowledge")
     assert result["parse_status"]=="ambiguous" and result["correctness"]==0
+
+@pytest.mark.parametrize("answer,gold", [
+    (r"Work: \frac{\sum xy}{\sum x^2}"+"\n\n16", "16"),
+    ("Work: 60,000 + 5,000 + 40 + 3\n\n65043", "65043"),
+    (r"Work: \frac{\sum xy}{\sum x^2}"+"\n\n"+r"དེས་ན། \(b\) ཡི་རིན་ཐང་ནི་ \(0.28\) ཡིན།", "0.28"),
+    (r"Work: \frac{\sum xy}{\sum x^2}"+"\n\n"+r"དེ་ལྟར་\(b = 0.28\)ཡིན།", "0.28"),
+])
+def test_terminal_numeric_claim_ignores_working_formula(answer,gold):
+    result=run(answer,gold)
+    assert result["correctness"]==1, result
+
+def test_numeric_terminal_does_not_select_an_incidental_last_number():
+    result=run("Working value: 42.\nChecked in 3 steps.","3")
+    assert result["correctness"]==0 and result["parse_status"]=="ambiguous"
+    result=run("Final answer: 42.\n43","43")
+    assert result["correctness"]==0 and result["parse_status"]=="ambiguous"
