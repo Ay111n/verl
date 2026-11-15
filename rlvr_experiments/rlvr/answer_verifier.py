@@ -17,8 +17,9 @@ FRAC = re.compile(r"([+-]?)\s*\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)
 CUE = re.compile(
     r"\b(?:(?:final|correct)\s+answer|answer|final\s+result)\b"
     r"\s*(?:is\b|=|:|：)?"
-    r"|(?:མཐའ་མའི་)?ལན(?:་(?:ཡང་དག་པ|ཡང་དག|དག|ནི))*"
-    r"|ཡང་དག་པའི་(?:འདེམས་གཞི|འདེམས་ཚན|གདམ་ག)(?:་ནི)?",
+    r"|(?:མཐའ་མའི་)?ལན(?:་(?:ཡང་དག་པ|ཡང་དག|ངོ་མ|དག|ནི))*"
+    r"|ཡང་དག་པའི་(?:འདེམས་གཞི|འདེམས་ཚན|གདམ་ག)(?:་ནི)?"
+    r"|(?:འདེམས་གཞི|འདེམས་ཚན|གདམ་ག)་ཡང་དག་པ(?:་ནི)?",
     re.IGNORECASE)
 OPTION_CUE = re.compile(r"\b(?:option|choice)\b\s*(?:is\b|=|:|：)?", re.IGNORECASE)
 SENTENCE_END = re.compile(r"\n|[。།༎!?;；]|\.(?=\s|$)")

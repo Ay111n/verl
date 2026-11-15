@@ -174,3 +174,24 @@ def test_numeric_terminal_does_not_select_an_incidental_last_number():
     assert result["correctness"]==0 and result["parse_status"]=="ambiguous"
     result=run("Final answer: 42.\n43","43")
     assert result["correctness"]==0 and result["parse_status"]=="ambiguous"
+
+@pytest.mark.parametrize("answer,gold", [
+    ("B and C are unsuitable.\n\nལན་ངོ་མ། **A. Description**", "A"),
+    ("A. 250 N\nB. 750 N\nF. 2250 N\nG. 3000 N\n\nའདེམས་གཞི་ཡང་དག་པ་ནི་ G ཡིན།", "G"),
+    ("B and C are unsuitable. འདེམས་ཚན་ཡང་དག་པ་ནི་ A ཡིན།", "A"),
+])
+def test_explicit_tibetan_heading_variants_are_gold_independent(answer,gold):
+    result=run(answer,gold,"knowledge")
+    other=run(answer,"J","knowledge")
+    assert result["correctness"]==1 and result["pair_eligible"]
+    assert other["correctness"]==0 and other["pair_eligible"]
+    assert result["extracted_answer"]==other["extracted_answer"]==gold
+
+def test_tibetan_heading_variants_preserve_conflict_detection():
+    result=run("ལན་ངོ་མ། A\nའདེམས་གཞི་ཡང་དག་པ་ནི་ B ཡིན།","B","knowledge")
+    assert result["parse_status"]=="ambiguous"
+    assert not result["pair_eligible"]
+
+def test_numeric_real_answer_heading():
+    result=run("Earlier value: 12.\nལན་ངོ་མ། 42","42")
+    assert result["correctness"]==1 and result["pair_eligible"]
