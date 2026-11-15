@@ -3,17 +3,29 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from rlvr.verifier import VERIFIER_VERSION, verify
+from rlvr.verifier import VERIFIER_VERSION, verify, parse_protocol
+from rlvr.answer_verifier import verify_answer, VERIFIER_VERSION as ANSWER_VERIFIER_VERSION
 VALIDITY_FLAGS = ('thinking_unclosed', 'no_reliable_final', 'empty_final', 'extraction_failed', 'truncated')
 
-def score_response(*, prompt, completion, domain, gold_answer, option_labels=(), profile='R0', finish_reason=None, output_tokens=None, max_response_length=4096, thinking_tokens=None, component_flags=None):
+def score_response(*, prompt, completion, domain, gold_answer, option_labels=(), profile='R0', finish_reason=None, output_tokens=None, max_response_length=4096, thinking_tokens=None, component_flags=None, verifier_version=VERIFIER_VERSION, numeric_policy=None):
     if profile not in ('R0',):
         raise ValueError(f'Reward profile {profile} is reserved and not implemented')
     flags = component_flags or {}
     for name in ('compute_cost', 'prefix_value', 'consistency', 'structure'):
         if flags.get(name, False):
             raise ValueError(f'Reserved reward component cannot be enabled: {name}')
-    parsed = verify(prompt, completion, domain, gold_answer, option_labels)
+    if verifier_version == ANSWER_VERIFIER_VERSION:
+        parsed = verify_answer(
+            {'domain': domain, 'canonical_answer': gold_answer,
+             'option_labels': option_labels, 'numeric_policy': numeric_policy or {}},
+            prompt=prompt, completion=completion, finish_reason=finish_reason,
+            output_tokens=output_tokens, max_new_tokens=max_response_length)
+        if not parsed['execution_valid']:
+            raise ValueError('Unified verifier requires a resolved, successful execution')
+    elif verifier_version == VERIFIER_VERSION:
+        parsed = verify(prompt, completion, domain, gold_answer, option_labels)
+    else:
+        raise ValueError(f'Unsupported verifier version: {verifier_version}')
     if finish_reason not in (None, 'stop', 'length'):
         raise ValueError(f'Unresolved termination reason: {finish_reason!r}')
     if finish_reason is None and (output_tokens is None or max_response_length is None):
@@ -35,7 +47,7 @@ def score_response(*, prompt, completion, domain, gold_answer, option_labels=(),
     correctness = float(parsed['correctness'])
     components = {'correctness': {'enabled': True, 'raw': correctness, 'contribution': correctness}}
     info = {k: v for k, v in parsed.items() if k not in ('think_body',)}
-    info.update({'reward_profile': profile, 'verifier_version': VERIFIER_VERSION, 'domain': domain, 'thinking_tokens': thinking_tokens, 'thinking_tokens_method': 'probe_v1_retokenized_body', 'output_tokens': output_tokens, 'response_length': output_tokens, 'finish_reason': finish_reason, 'validity_invalid': invalid, 'truncation_source': 'native_finish_reason' if finish_reason is not None else 'length_bound_fallback', 'component_r0': correctness, 'component_consistency': 0.0, 'component_structure': 0.0, 'r0_enabled': True, 'consistency_enabled': False, 'consistency_raw': None, 'structure_enabled': False, 'structure_raw': None, 'correctness_raw': correctness, 'validity_penalty_raw': int(invalid), 'total_reward': correctness, 'components_json': json.dumps(components, ensure_ascii=False, sort_keys=True)})
+    info.update({'reward_profile': profile, 'verifier_version': verifier_version, 'domain': domain, 'thinking_tokens': thinking_tokens, 'thinking_tokens_method': 'probe_v1_retokenized_body', 'output_tokens': output_tokens, 'response_length': output_tokens, 'finish_reason': finish_reason, 'validity_invalid': invalid, 'truncation_source': 'native_finish_reason' if finish_reason is not None else 'length_bound_fallback', 'component_r0': correctness, 'component_consistency': 0.0, 'component_structure': 0.0, 'r0_enabled': True, 'consistency_enabled': False, 'consistency_raw': None, 'structure_enabled': False, 'structure_raw': None, 'correctness_raw': correctness, 'validity_penalty_raw': int(invalid), 'total_reward': correctness, 'components_json': json.dumps(components, ensure_ascii=False, sort_keys=True)})
     return {'reward_score': info['total_reward'], 'reward_extra_info': info}
 
 def _get(config, path, default=None):
@@ -53,6 +65,7 @@ class RLVRRewardManager:
         self.config, self.tokenizer = (config, tokenizer)
         self.profile = _get(config, 'rlvr.reward_profile', 'R0')
         self.component_flags = _get(config, 'rlvr.component_flags', {})
+        self.verifier_version = _get(config, 'rlvr.verifier_version', VERIFIER_VERSION)
         self.max_response_length = _get(config, 'data.max_response_length', 4096)
 
     async def run_single(self, data) -> dict[str, Any]:
@@ -68,10 +81,14 @@ class RLVRRewardManager:
         tool = item.non_tensor_batch.get('tool_extra_fields', {}) or {}
         gold = item.non_tensor_batch['reward_model']['ground_truth']
         domain = extra.get('domain', item.non_tensor_batch['data_source'])
-        preliminary = verify(prompt, response, domain, gold, extra.get('option_labels', ()))
+        if extra.get('verifier_version', self.verifier_version) != self.verifier_version:
+            raise ValueError('Dataset verifier version differs from training configuration')
+        if tool.get('backend_abort', False):
+            raise ValueError('Backend abort is an execution failure, not a wrong model answer')
+        preliminary = parse_protocol(prompt, response)
         body = preliminary['think_body']
         think_tokens = len(self.tokenizer(body, add_special_tokens=False)['input_ids']) if body else 0
-        result = score_response(prompt=prompt, completion=response, domain=domain, gold_answer=gold, option_labels=extra.get('option_labels', ()), profile=self.profile, finish_reason=tool.get('native_finish_reason', extra.get('finish_reason')), output_tokens=valid_length, max_response_length=int(tool.get('effective_max_tokens', self.max_response_length)), thinking_tokens=think_tokens, component_flags=self.component_flags)
+        result = score_response(prompt=prompt, completion=response, domain=domain, gold_answer=gold, option_labels=extra.get('option_labels', ()), profile=self.profile, finish_reason=tool.get('native_finish_reason', extra.get('finish_reason')), output_tokens=valid_length, max_response_length=int(tool.get('effective_max_tokens', self.max_response_length)), thinking_tokens=think_tokens, component_flags=self.component_flags, verifier_version=self.verifier_version, numeric_policy=extra.get('numeric_policy'))
         result['reward_extra_info'].update({'backend_abort': tool.get('backend_abort', False), 'effective_max_tokens': tool.get('effective_max_tokens', self.max_response_length)})
         result['reward_extra_info'].update({k: extra.get(k) for k in ('sample_id', 'split_role', 'difficulty_bucket', 'answer_type', 'option_count')})
         return result
