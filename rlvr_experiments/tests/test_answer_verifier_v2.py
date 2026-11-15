@@ -195,3 +195,14 @@ def test_tibetan_heading_variants_preserve_conflict_detection():
 def test_numeric_real_answer_heading():
     result=run("Earlier value: 12.\nལན་ངོ་མ། 42","42")
     assert result["correctness"]==1 and result["pair_eligible"]
+
+@pytest.mark.parametrize("answer,gold", [
+    ("2-2","2"), ("2**2","2"), (r"2 \cdot 2","2"),
+    (r"2 \times 2","2"), ("2(2)","2"), ("3!","3"),
+    (r"\binom{2}{2}","2"), ("|-2|","-2"),
+    (r"2 \div 2","2"), ("2--2","2"),
+])
+def test_symbolic_expression_cannot_match_an_operand(answer,gold):
+    result=run(answer,gold)
+    assert result["parse_status"]=="unsupported_numeric", result
+    assert result["correctness"]==0 and not result["pair_eligible"]

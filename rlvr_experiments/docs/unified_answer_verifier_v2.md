@@ -18,7 +18,7 @@ reward is introduced.
 
 CPU validation:
 python -m pytest tests/test_answer_verifier_v2.py tests/test_contracts_rewards.py -q
-CPU result: 106 passed. The real-output pilot also covers Tibetan shad-delimited
+CPU result: 116 passed. The real-output pilot also covers Tibetan shad-delimited
 answer headings and terminal option labels; explanations are not scanned for a
 gold-matching label. Probe and reward adapters use the same implementation.
 GPU generation and teacher-forcing evidence is stored with the finetuning probe.
@@ -30,3 +30,7 @@ unscored; no semantic judge or gold-guided candidate selection is used.
 Additional real-output regressions cover Tibetan actual-answer headings and
 post-nominal correct-option phrases. Conflicting explicit conclusions remain
 ambiguous, and changing gold does not change extracted labels.
+
+Unsupported numeric expressions cannot match a repeated operand: subtraction,
+powers, implicit multiplication, LaTeX arithmetic, factorials and absolute-value
+expressions are rejected without evaluation.

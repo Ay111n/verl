@@ -164,7 +164,14 @@ def _numeric_values(text: str, policy: dict[str, Any]) -> list[tuple[str, Fracti
     text = re.sub(r"(?<=\d),(?=\s+[-+]?\d)", " ; ", text)
     if re.search(r"\\(?:frac|dfrac|tfrac|sqrt)\b", text):
         raise ValueError("unsupported_numeric_expression")
-    if re.search(r"\\(?:pi|sqrt|sin|cos|tan|log|ln)\b|[π∑]|\d\s*[*×÷^+]\s*\d", text):
+    if re.search(r"\\(?:pi|sqrt|sin|cos|tan|log|ln|exp|binom|lvert|rvert)\b|[π∑|]", text):
+        raise ValueError("unsupported_numeric_expression")
+    # Final numeric answers are literals, not expressions whose repeated operands
+    # could accidentally collapse to one extracted value (for example, 2**2).
+    if re.search(r"(?:\d|\))\s*(?:\*\*?|[×÷^+\-]|\\(?:times|cdot|div|pm|mp)\b)"
+                 r"\s*[+\-]?\s*(?:\d|\()", text):
+        raise ValueError("unsupported_numeric_expression")
+    if re.search(r"\d\s*\(\s*[+\-]?\d|\d\s*!", text):
         raise ValueError("unsupported_numeric_expression")
     if re.search(r"\b(?:nan|inf|infinity)\b|∞", text, re.IGNORECASE):
         raise ValueError("nonfinite_number")
