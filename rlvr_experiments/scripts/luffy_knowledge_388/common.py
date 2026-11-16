@@ -20,7 +20,13 @@ from rlvr.verifier import Candidate, make_prompt, render_prompt
 from rlvr.answer_verifier import verify_answer, VERIFIER_VERSION
 
 def paths():
-    return load_paths("luffy_knowledge_388_l20")
+    return load_paths(os.environ.get("LUFFY_PATH_PROFILE", "luffy_knowledge_388_temperature_l20"))
+
+def configuration(p):
+    cfg=json.loads(p["experiment_config"].read_text())
+    assert cfg["likelihood_temperature"]==cfg["temperature"]==0.6
+    assert cfg["likelihood_normalization"]=="temperature_scaled_full_softmax"
+    return cfg
 
 def object_sha(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

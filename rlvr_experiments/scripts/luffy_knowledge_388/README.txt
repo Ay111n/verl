@@ -31,8 +31,12 @@ The old-policy HF denominator is the detached logp from the unchanged model
 before its single optimizer update. Dropout=0, no PPO data reuse, and exactly
 one update per batch make this equal to a separate old HF policy forward.
 Ratio is numerically1 before updating; its numerator retains the policy gradient.
-vLLM raw generation probabilities are recorded as a backend diagnostic, never
-used as an English-source importance denominator.
+All optimized policy, frozen-reference and demonstration likelihoods use
+log_softmax(logits / 0.6), matching the configured rollout temperature.
+The full vocabulary softmax is used in training; rollout top-k/top-p filtering
+remains a conventional sampling approximation and is not importance-corrected.
+vLLM raw (temperature1) probabilities and fixed32 raw NLL are diagnostics only.
+They are never substituted for the optimized policy or an English proposal.
 Off-policy p_phi=1 and shaping follow the official practical LUFFY implementation;
 this is not unbiased correction for the filtered English proposal.
 LUFFY: https://arxiv.org/html/2504.14945v3
@@ -73,9 +77,9 @@ accepted attempt. Only a fully passed attempt unlocks formal training.
 
 Launch from rlvr_experiments in verified inference environment:
 python scripts/luffy_knowledge_388/preflight.py
-CUDA_VISIBLE_DEVICES=5 python scripts/luffy_knowledge_388/worker.py --rpc runs/luffy_knowledge_388_20261116/rpc
+CUDA_VISIBLE_DEVICES=5 python scripts/luffy_knowledge_388/worker.py --rpc runs/luffy_knowledge_388_20261117/rpc
 CUDA_VISIBLE_DEVICES=3,4 python -m torch.distributed.run --standalone --nproc_per_node=2 -- scripts/luffy_knowledge_388/train.py --mode calibrate
-CUDA_VISIBLE_DEVICES=3,4 python -m torch.distributed.run --standalone --nproc_per_node=2 -- scripts/luffy_knowledge_388/train.py --mode smoke --smoke-id smoke-acceptance-3
+CUDA_VISIBLE_DEVICES=3,4 python -m torch.distributed.run --standalone --nproc_per_node=2 -- scripts/luffy_knowledge_388/train.py --mode smoke --smoke-id smoke-temperature-1
 CUDA_VISIBLE_DEVICES='' python scripts/luffy_knowledge_388/run_pipeline.py
 
 Evaluation reuses benchmark/eval/scripts/evaluate_same_source_dpo_316.py
@@ -98,3 +102,15 @@ The stage uses no GPU and writes analysis_complete.json only after all raw onlin
 rewards, policy hash chains, budgets and matched DEV protocols pass the audit.
 Training/evaluation failures stop this stage with a separate failure record.
 The returned SFT predictions are reused unchanged, not sampled again.
+
+Temperature correction, 2026-11-17
+The original luffy_knowledge_388_20261116 run was stopped after A step24.
+It sampled at T0.6 but optimized raw T1 likelihoods; no B/C or DEV was run.
+Its outputs/checkpoints are retained as superseded debugging evidence only.
+Corrected run luffy_knowledge_388_20261117 reuses the identical frozen388 data,
+recalibrates alpha at T0.6, repeats CPU/GPU acceptance, and initializes all arms
+from the same original SFT. The old A weights/optimizer are not resumed.
+CPU regression checks scaled normalization and analytic gradients; GPU smoke
+compares the optimized likelihood to dense logits/T and raw scores to vLLM.
+Official temperature implementation: Simplified-Reasoning/LUFFY commit
+01f4ae066249e6965ce0d5512ccdf99a12895c74, luffy/verl/verl/workers/actor/dp_actor.py.

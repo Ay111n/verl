@@ -82,3 +82,37 @@ def test_optimizer_checkpoint_roundtrip():
     for parameter,optimizer in [(first,original),(second,resumed)]:
         optimizer.zero_grad();parameter.square().sum().backward();optimizer.step()
     torch.testing.assert_close(first,second,rtol=0,atol=0)
+
+def test_nonunit_temperature_likelihood_and_gradient():
+    class Toy(torch.nn.Module):
+        def __init__(self):
+            super().__init__();self.emb=torch.nn.Embedding(13,5);self.lm_head=torch.nn.Linear(5,13,bias=False)
+        def model(self,input_ids,use_cache=False):
+            return SimpleNamespace(last_hidden_state=self.emb(input_ids))
+    torch.manual_seed(73);model=Toy()
+    prompt=[2,3,4];response=[7,8,12];temperature=.6
+    got,raw=response_logps(model,prompt,response,chunk_size=2,temperature=temperature,return_raw=True)
+    logits=model.lm_head(model.emb(torch.tensor([prompt+response[:-1]])))[0,len(prompt)-1:].float()
+    expected=-F.cross_entropy(logits/temperature,torch.tensor(response),reduction="none")
+    expected_raw=-F.cross_entropy(logits,torch.tensor(response),reduction="none")
+    torch.testing.assert_close(got,expected);torch.testing.assert_close(raw,expected_raw)
+    assert not raw.requires_grad and not torch.allclose(got,raw)
+    assert not torch.allclose(got,raw/temperature), "Temperature applies before softmax normalization"
+    g1=torch.autograd.grad(-got.mean(),tuple(model.parameters()),retain_graph=True)
+    g2=torch.autograd.grad(-expected.mean(),tuple(model.parameters()),retain_graph=True)
+    for left,right in zip(g1,g2):torch.testing.assert_close(left,right)
+    legacy=response_logps(model,prompt,response,chunk_size=2)
+    torch.testing.assert_close(legacy,expected_raw)
+
+def test_online_gradient_uses_sampling_temperature():
+    logits=torch.tensor([[.2,-.4,1.1],[1.2,-.3,.4]],dtype=torch.float64,requires_grad=True)
+    tokens=torch.tensor([0,2]);temperature=.6
+    logp=F.log_softmax(logits/temperature,dim=-1).gather(-1,tokens[:,None]).squeeze(-1)
+    loss,_=online_terms(logp,logp.detach(),logp.detach(),.4,.2)
+    actual,=torch.autograd.grad(loss,logits,retain_graph=True)
+    expected=.4/len(tokens)/temperature*(F.softmax(logits/temperature,dim=-1)-F.one_hot(tokens,3))
+    torch.testing.assert_close(actual,expected)
+    raw=F.log_softmax(logits,dim=-1).gather(-1,tokens[:,None]).squeeze(-1)
+    wrong,_=online_terms(raw,raw.detach(),raw.detach(),.4,.2)
+    wrong_gradient,=torch.autograd.grad(wrong,logits)
+    assert not torch.allclose(actual,wrong_gradient)

@@ -5,11 +5,11 @@ from pathlib import Path
 import subprocess
 import time
 import traceback
-from common import paths, save, sha, object_sha, rpc
+from common import configuration, paths, save, sha, object_sha, rpc
 
 def main():
     p=paths();project=p["project_dir"];run=p["run_root"];py=str(p["python"])
-    cfg=json.loads((project/"configs/luffy_knowledge_388_20261116.json").read_text())
+    cfg=configuration(p)
     calibration=json.loads((run/"calibration.json").read_text())
     smoke=json.loads((run/"smoke/summary.json").read_text())
     assert json.loads((run/"cpu_acceptance.json").read_text())["passed"]

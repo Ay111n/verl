@@ -2,10 +2,10 @@
 import json
 from pathlib import Path
 from transformers import AutoTokenizer
-from common import paths, read_rows, save, sha, prompts, verify, plan_indices, object_sha, VERIFIER_VERSION
+from common import configuration, paths, read_rows, save, sha, prompts, verify, plan_indices, object_sha, VERIFIER_VERSION
 
 def main():
-    p=paths();cfg=json.loads((p["project_dir"]/"configs/luffy_knowledge_388_20261116.json").read_text())
+    p=paths();cfg=configuration(p)
     rows=read_rows(p["train_data"])
     assert len(rows)==len({r["id"] for r in rows})==388 and sha(p["train_data"])==cfg["train_sha256"]
     tok=AutoTokenizer.from_pretrained(str(p["model_path"]),local_files_only=True)

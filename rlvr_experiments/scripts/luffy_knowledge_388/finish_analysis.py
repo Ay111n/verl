@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 import traceback
-from common import paths, save, sha
+from common import configuration, paths, save, sha
 
 def validate_inputs(p):
     manifest=json.loads((p["run_root"]/"analysis_input_manifest.json").read_text())
@@ -20,7 +20,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--check",action="store_true")
     args=parser.parse_args()
-    p=paths();run=p["run_root"];manifest=validate_inputs(p)
+    p=paths();cfg=configuration(p);run=p["run_root"];manifest=validate_inputs(p)
     if args.check:
         print(json.dumps({"analysis_inputs_verified":len(manifest["files"])}));return
     lock=run/"analysis_stage.lock"
@@ -37,11 +37,11 @@ def main():
         save(run/"analysis_stage_state.json",{"phase":"analyzing","pid":os.getpid(),"unix":time.time()})
         env=dict(os.environ,CUDA_VISIBLE_DEVICES="",OMP_NUM_THREADS="2")
         command=[str(p["python"]),"-u",str(p["benchmark_root"]/"eval/scripts/analyze_luffy_knowledge_388.py"),
-                 "--root",str(p["benchmark_root"].parent)]
+                 "--root",str(p["benchmark_root"].parent),"--run-name",cfg["name"]]
         with (run/"analysis.log").open("w") as log:
             result=subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT)
         assert result.returncode==0,("CPU comparison failed",result.returncode)
-        output=p["benchmark_root"]/"eval/analysis/luffy_knowledge_388_20261116"
+        output=p["benchmark_root"]/"eval/analysis"/cfg["name"]
         report=json.loads((output/"comparison.json").read_text())
         assert report["matched_protocol"] and report["dev_evaluated_steps"]==[75] and not report["test_evaluated"]
         save(run/"analysis_complete.json",{"passed":True,"completed_unix":time.time(),

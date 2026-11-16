@@ -7,10 +7,11 @@ from pathlib import Path
 import random
 import time
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from transformers import AutoTokenizer
 from common import (
-    paths, read_rows, save, sha, prompts, verify, plan_indices, object_sha,
+    configuration, paths, read_rows, save, sha, prompts, verify, plan_indices, object_sha,
     load_model, response_logps, adapter_hash, runtime, advantages, online_terms,
     demonstration_loss, lr_for_update, setup_dist, barrier, reduce_gradients,
     grad_copy, grad_norm, grad_summary, gather, rpc, generate, frozen_manifest,
@@ -96,9 +97,9 @@ def update(model,opt,params,batch,generated,arm,cfg,rank,world,number):
             assert len(prompt)+len(ids)<=cfg["max_model_len"]
             model.eval()
             with model.disable_adapter(),torch.no_grad():
-                ref=response_logps(model,prompt,ids,cfg["chunk_size"]).detach()
+                ref=response_logps(model,prompt,ids,cfg["chunk_size"],temperature=cfg["likelihood_temperature"]).detach()
             model.train()
-            logp=response_logps(model,prompt,ids,cfg["chunk_size"])
+            logp,raw_logp=response_logps(model,prompt,ids,cfg["chunk_size"],temperature=cfg["likelihood_temperature"],return_raw=True)
             # Exactly one update per fresh batch, with zero dropout and no preceding
             # optimizer step: the old HF policy is the current unchanged parameters.
             # Detach only the denominator; ratio value=1 but numerator gradient remains.
@@ -107,16 +108,17 @@ def update(model,opt,params,batch,generated,arm,cfg,rank,world,number):
             loss=(on+cfg["kl_coef"]*kl)/(len(batch)*4)
             assert torch.isfinite(loss)
             loss.backward()
-            backend=(logp.detach().cpu()-torch.tensor(o["raw_logprobs"])).abs()
+            backend=(raw_logp.cpu()-torch.tensor(o["raw_logprobs"])).abs()
             stats.append({"id":row["id"],"rollout_index":j,"tokens":len(ids),
                 "advantage":float(adv[j]),"policy_loss":float(on.detach()),"sampled_kl":float(kl.detach()),
-                "mean_logprob":float(logp.detach().mean()),"hf_vllm_raw_logprob_mae":float(backend.mean()),
+                "mean_logprob":float(logp.detach().mean()),"mean_raw_logprob":float(raw_logp.mean()),
+                "likelihood_temperature":cfg["likelihood_temperature"],"hf_vllm_raw_logprob_mae":float(backend.mean()),
                 "verification":compact(v),"old_bo_correct":sum(row["old_bo_rewards"]),
                 "stratum":row["probe_selection"]["stratum"]})
             if rank==0:
                 print(json.dumps({"event":"online_backward","arm":arm,"step":number,"question":i,"rollout":j,
                     "tokens":len(ids),"reward":v["correctness"]}),flush=True)
-            del logp,ref,on,kl,loss
+            del logp,raw_logp,ref,on,kl,loss
     reduce_gradients(params)
     online=grad_copy(params)
     opt.zero_grad(set_to_none=True)
@@ -125,7 +127,7 @@ def update(model,opt,params,batch,generated,arm,cfg,rank,world,number):
             if i%world!=rank:continue
             _,ad=advantages(rewards[i],"C")
             model.train()
-            logp=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"])
+            logp=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"],temperature=cfg["likelihood_temperature"])
             nll=-logp.mean()
             shaped=demonstration_loss(logp,ad,cfg["gamma"])
             loss=(cfg["nll_alpha"]*nll if arm=="B" else cfg["demo_scale"]*shaped)/len(batch)
@@ -174,7 +176,7 @@ def calibrate(p,cfg,rows,rank,world):
             opt.zero_grad(set_to_none=True)
             for i,row in enumerate(batch):
                 if i%world!=rank:continue
-                lp=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"])
+                lp=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"],temperature=cfg["likelihood_temperature"])
                 _,ad=advantages(row["old_bo_rewards"],"C")
                 loss=-lp.mean() if kind=="nll" else cfg["demo_scale"]*demonstration_loss(lp,ad,cfg["gamma"])
                 (loss/len(batch)).backward()
@@ -199,10 +201,21 @@ def backend_check(model,row,adapter,name,cfg,p,rank):
             "adapter_sha256":sha(adapter/"adapter_model.safetensors"),
             "prompts":[{"id":row["id"],"prompt_token_ids":prompt+ids,"score_start":len(prompt),"seed":42}]})
         model.eval()
-        with torch.no_grad():hf=response_logps(model,prompt,ids,cfg["chunk_size"]).cpu()
+        with torch.no_grad():
+            policy,hf=response_logps(model,prompt,ids,cfg["chunk_size"],temperature=cfg["likelihood_temperature"],return_raw=True)
+            hf=hf.cpu();policy=policy.cpu()
+            tokens=torch.tensor([prompt+ids[:-1]],device=next(model.parameters()).device)
+            dense=model(input_ids=tokens,use_cache=False).logits[0,len(prompt)-1:].float()
+            target=torch.tensor(ids,device=dense.device)
+            expected=-F.cross_entropy(dense/cfg["likelihood_temperature"],target,reduction="none").cpu()
+            dense_error=float((policy-expected).abs().mean())
+            policy_raw_difference=float((policy-hf).abs().mean())
+            assert dense_error<.03,(dense_error,name)
+            assert policy_raw_difference>1e-4,(policy_raw_difference,name)
         vals=vl["records"][0]["logprobs"];mae=float((hf-torch.tensor(vals)).abs().mean())
         assert mae<.08,(mae,name)
-        value={"mae":mae,"hf":hf.tolist(),"vllm":vals}
+        value={"mae":mae,"hf":hf.tolist(),"vllm":vals,"likelihood_temperature":cfg["likelihood_temperature"],
+            "policy_vs_dense_mae":dense_error,"policy_vs_raw_mae":policy_raw_difference}
     else:value=None
     barrier()
     return value
@@ -222,7 +235,7 @@ def smoke(p,cfg,rows,rank,world,attempt="smoke"):
     before=backend_check(model,batch[0],adapter,f"{attempt}-score-zero",cfg,p,rank)
     model.eval()
     with model.disable_adapter(),torch.no_grad():
-        reference_before=response_logps(model,batch[0]["prompt_token_ids"],batch[0]["demo"]["response_token_ids"][:64]).cpu()
+        reference_before=response_logps(model,batch[0]["prompt_token_ids"],batch[0]["demo"]["response_token_ids"][:64],temperature=cfg["likelihood_temperature"]).cpu()
     records=[]
     torch.cuda.reset_peak_memory_stats()
     for number in (1,2):
@@ -234,7 +247,7 @@ def smoke(p,cfg,rows,rank,world,attempt="smoke"):
     after=backend_check(model,batch[0],adapter,f"{attempt}-score-updated",cfg,p,rank)
     model.eval()
     with model.disable_adapter(),torch.no_grad():
-        reference_after=response_logps(model,batch[0]["prompt_token_ids"],batch[0]["demo"]["response_token_ids"][:64]).cpu()
+        reference_after=response_logps(model,batch[0]["prompt_token_ids"],batch[0]["demo"]["response_token_ids"][:64],temperature=cfg["likelihood_temperature"]).cpu()
     delta=float((reference_before-reference_after).abs().max())
     assert delta==0 and frozen_manifest(model)==frozen and adapter_hash(model)!=initial
     # Verify saved optimizer and adapter independently in this same process.
@@ -253,6 +266,7 @@ def smoke(p,cfg,rows,rank,world,attempt="smoke"):
         assert effect>1e-7
         save(run/"summary.json",{"passed":True,"config":cfg,"runtime":runtime(),
             "question_ids":[r["id"] for r in batch],"fresh_rollouts":32,"optimizer_steps":2,
+            "likelihood_temperature":cfg["likelihood_temperature"],"dense_probability_check_passed":True,
             "maximum_demo_context":max(len(r["prompt_token_ids"])+len(r["demo"]["response_token_ids"]) for r in batch),
             "initial_adapter_hash":initial,"updated_adapter_hash":adapter_hash(model),
             "frozen_reference_logprob_max_change":delta,"frozen_base_fingerprints_unchanged":True,
@@ -273,13 +287,15 @@ def diagnose_demonstrations(model,rows,p,cfg,arm,step,rank,world):
         for position,index in enumerate(indices):
             if position%world!=rank:continue
             row=rows[index]
-            lp=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"])
-            values.append({"id":row["id"],"nll":float(-lp.mean()),"tokens":len(lp)})
+            lp,raw=response_logps(model,row["prompt_token_ids"],row["demo"]["response_token_ids"],cfg["chunk_size"],temperature=cfg["likelihood_temperature"],return_raw=True)
+            values.append({"id":row["id"],"nll":float(-raw.mean()),"policy_nll":float(-lp.mean()),"tokens":len(lp)})
     values=sum(gather(values,world),[])
     assert len(values)==32
     if rank==0:save(p["run_root"]/arm/("demonstration-diagnostic-%03d.json"%step),
         {"step":step,"scope":"Same fixed 32 training questions, teacher forcing only; not a validation set",
-         "mean_nll":sum(x["nll"] for x in values)/len(values),"rows":values})
+         "mean_nll":sum(x["nll"] for x in values)/len(values),
+         "mean_policy_nll":sum(x["policy_nll"] for x in values)/len(values),
+         "raw_nll_temperature":1.0,"policy_nll_temperature":cfg["likelihood_temperature"],"rows":values})
     barrier()
 
 
@@ -341,7 +357,7 @@ def main():
     args=parser.parse_args()
     rank,world=setup_dist()
     assert world==2
-    p=paths();cfg=json.loads((p["project_dir"]/"configs/luffy_knowledge_388_20261116.json").read_text())
+    p=paths();cfg=configuration(p)
     preflight=json.loads((p["run_root"]/"preflight.json").read_text())
     assert preflight["passed"] and preflight["config"]==cfg
     assert sha(p["train_data"])==cfg["train_sha256"]

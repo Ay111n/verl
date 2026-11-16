@@ -1,5 +1,6 @@
 """Offline DPO pilot primitives; frozen reference is the complete merged SFT."""
 import hashlib
+import math
 import json
 import random
 from pathlib import Path
@@ -45,9 +46,9 @@ def load_model(path, seed=42, adapter=None, trainable_adapter=False):
     model.train()
     return model
 
-def response_logps(model,prompt_ids,response_ids,chunk_size=128):
-    """Shift once: hidden[P-1:P+T-1] predicts response[0:T], EOS included."""
-    assert prompt_ids and response_ids
+def response_logps(model,prompt_ids,response_ids,chunk_size=128,temperature=1.0,return_raw=False):
+    """Causal response likelihood; optional temperature and detached raw diagnostics."""
+    assert prompt_ids and response_ids and math.isfinite(float(temperature)) and temperature>0
     base=model.get_base_model() if hasattr(model,"get_base_model") else model
     device=next(base.parameters()).device
     tokens=torch.tensor([prompt_ids+response_ids[:-1]],dtype=torch.long,device=device)
@@ -56,10 +57,19 @@ def response_logps(model,prompt_ids,response_ids,chunk_size=128):
     assert len(hidden)==len(target)
     values=[]
     def token_ce(h,t):
-        return -F.cross_entropy(base.lm_head(h).float(),t,reduction="none")
+        logits=base.lm_head(h).float()
+        policy=-F.cross_entropy(logits if temperature==1.0 else logits/temperature,t,reduction="none")
+        if not return_raw:return policy
+        if temperature==1.0:raw=policy.detach()
+        else:
+            with torch.no_grad():raw=-F.cross_entropy(logits.detach(),t,reduction="none")
+        return torch.stack((policy,raw))
     for start in range(0,len(target),chunk_size):
         h=hidden[start:start+chunk_size];t=target[start:start+chunk_size]
         values.append(checkpoint(token_ce,h,t,use_reentrant=False) if torch.is_grad_enabled() else token_ce(h,t))
+    if return_raw:
+        combined=torch.cat(values,dim=1)
+        return combined[0],combined[1].detach()
     return torch.cat(values)
 
 def terms(chosen,rejected,ref_chosen,ref_rejected,nc,nr,target,gate,beta=.1,alpha=1.):
