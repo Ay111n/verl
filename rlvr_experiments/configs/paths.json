@@ -26,6 +26,17 @@
       "evaluation_source_root": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/processed_data",
       "prepared_eval_dir": "${benchmark_root}/archive/rlvr_retired_splits_20261022_221449/prepared",
       "evaluation_status": "retired"
+    },
+    "opd_math_ab_l20": {
+      "benchmark_root": "/home/nlp/data/lyl/benchmark",
+      "finetuning_root": "/home/nlp/data/lyl/finetuning",
+      "model_path": "/home/nlp/data/lyl/finetuning/model/sft/en_cot_49800/merged/checkpoint-9000",
+      "python": "/opt/anaconda3/envs/inference/bin/python",
+      "train_data": "/home/nlp/data/lyl/finetuning/rl/final_data/opd_math_ab_20261116/train.jsonl",
+      "eval_data": "/home/nlp/data/lyl/benchmark/datasets/rlvr_math_holdout_20261116/questions.jsonl",
+      "run_root": "/home/nlp/data/lyl/verl/rlvr_experiments/runs/opd_math_ab_20261116",
+      "model_output": "/home/nlp/data/lyl/finetuning/model/rl/opd_math_ab_20261116",
+      "eval_output": "/home/nlp/data/lyl/benchmark/eval/results/opd_math_ab_20261116"
     }
   }
 }
