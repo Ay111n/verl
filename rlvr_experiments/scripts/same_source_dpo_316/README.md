@@ -60,8 +60,12 @@ Use explicit machine-configured paths and the inference interpreter.
 5. Each of base/true/shuffled: python -m torch.distributed.run --standalone
    --nproc_per_node=2 -- train.py train --data DATA_DIR --model SFT --run RUN_DIR
    --arm ARM --output ADAPTER_DIR.
-6. Sibling finetuning merge_same_source_dpo_adapter.py, then benchmark
-   evaluate_same_source_dpo_316.py for all arms and a fresh SFT baseline.
+6. Sibling finetuning merge_same_source_dpo_adapter.py exports weights in the
+   background. Benchmark evaluate_same_source_dpo_316.py evaluates the complete
+   SFT plus --adapter ADAPTER_DIR directly, alongside a fresh full-SFT baseline.
+   The evaluated adapter SHA-256 must match the completed training artifact.
+   Merged BF16 packages are retained for deployment but are not the evaluated
+   representation. postprocess.py coordinates these independent stages.
 
 Logs/configuration: ignored rlvr_experiments/runs. Data/reference targets:
 finetuning. Models: finetuning/model/rl. Independent DEV outputs: benchmark.

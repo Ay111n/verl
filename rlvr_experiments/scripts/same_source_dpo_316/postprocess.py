@@ -26,18 +26,23 @@ def main():
         with log.open("w") as f:return subprocess.Popen(cmd,env=local,stdout=f,stderr=subprocess.STDOUT)
     scores=[]
     for rank,gpu in enumerate(gpus):
+        completed=run/("post_"+a.arm)/f"complete.shard{rank}.json"
+        if completed.exists():
+            check=json.loads(completed.read_text())
+            assert check["rows"]==316 and check["adapter"]==str(models/"adapter")
+            continue
         scores.append(launch([py,"-u",str(code/"cache_reference.py"),"--data",str(root/"finetuning/rl/final_data"/name/"pairs.jsonl"),
             "--model",str(base),"--adapter",str(models/"adapter"),"--output",str(run/("post_"+a.arm)),
             "--shard",str(rank),"--shards","2"],run/(a.arm+f"_post{rank}.log"),gpu))
     merge=launch([py,"-u",str(root/"finetuning/scripts/model/merge_same_source_dpo_adapter.py"),
-        "--base",str(base),"--adapter",str(models/"adapter"),"--output",str(models/"merged")],run/(a.arm+"_merge.log"),"")
-    assert merge.wait()==0,"Merge failed"
+        "--base",str(base),"--adapter",str(models/"adapter"),"--output",str(models/"merged")],run/(a.arm+"_merge_streaming.log"),"")
     assert all(score.wait()==0 for score in scores),"Post scores failed"
     evalroot=root/"benchmark/eval/results"/name;evalroot.mkdir(parents=True,exist_ok=True)
     evaluation=launch([py,"-u",str(root/"benchmark/eval/scripts/evaluate_same_source_dpo_316.py"),
-        "--model",str(models/"merged"),"--arm",a.arm],evalroot/(a.arm+".log"),a.gpus)
+        "--model",str(base),"--adapter",str(models/"adapter"),"--arm",a.arm],evalroot/(a.arm+".log"),a.gpus)
     save(run/(a.arm+"_post_launch.json"),{"score_pids":[score.pid for score in scores],"evaluation_pid":evaluation.pid,"merged":str(models/"merged")})
     rc_eval=evaluation.wait()
     assert rc_eval==0,("Evaluation failure",rc_eval)
+    assert merge.wait()==0,"Merge failed"
     save(run/(a.arm+"_all_complete.json"),{"training":True,"merge":True,"post_scores":True,"dev_evaluation":True})
 if __name__=="__main__":main()
