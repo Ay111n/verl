@@ -89,3 +89,12 @@ bootstrap/McNemar; SFT baseline reused only after exact protocol/content checks.
 Train46-question recovery is diagnostic, not held-out generalization.
 Online/demo gradient norms and cosine are recorded each update; the online
 gradient includes its common KL. Sampled objective value alone is not success.
+
+Final CPU comparison stage
+finish_analysis.py validates the hash-pinned analysis and SFT baseline artifacts,
+waits for the three final DEV evaluations, and runs the benchmark-owned analyzer.
+--check validates its five inputs without starting inference or waiting.
+The stage uses no GPU and writes analysis_complete.json only after all raw online
+rewards, policy hash chains, budgets and matched DEV protocols pass the audit.
+Training/evaluation failures stop this stage with a separate failure record.
+The returned SFT predictions are reused unchanged, not sampled again.
