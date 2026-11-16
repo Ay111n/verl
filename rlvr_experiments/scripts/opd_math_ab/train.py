@@ -167,7 +167,7 @@ def smoke(p, cfg, tok, rows):
     adapter_effect = max(abs(a-b) for a,b in zip(validation0["vllm"],validation1["vllm"]))
     assert adapter_effect > 1e-7
     report = {
-        "passed":True, "runtime":current_identity(), "config":cfg,
+        "passed":True, "runtime":current_identity(cfg["kl_chunk"]), "config":cfg,
         "rollout_count":16,"backpropagation_examples":len(samples),
         "initial_adapter_hash":initial,"updated_adapter_hash":changed,
         "teacher_fixed_prefix_hidden_max_difference":teacher_delta,
@@ -216,7 +216,7 @@ def train(p, cfg, tok, rows, arm):
         frozen=tensor_manifest(model)
         adapter=checkpoint(model,optimizer,out,step,cfg,initial,frozen)
     own_start = {"arm":arm,"initial_adapter_hash":initial,"train_sha256":sha(p["train_data"]),
-                 "config":cfg,"runtime":current_identity(),"trainable_parameters":sum(v.numel() for v in trainable),
+                 "config":cfg,"runtime":current_identity(cfg["kl_chunk"]),"trainable_parameters":sum(v.numel() for v in trainable),
                  "trainable_names":[n for n,v in model.named_parameters() if v.requires_grad]}
     save(run/"initialization.json",own_start)
     other = p["run_root"]/("solution" if arm=="answer" else "answer")/"initialization.json"

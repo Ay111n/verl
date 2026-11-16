@@ -145,6 +145,8 @@ def tensor_manifest(model):
     return selected
 
 
-def current_identity():
+def current_identity(kl_chunk=64):
+    metadata = runtime()
+    metadata["chunk_size"] = kl_chunk
     return {"pid": os.getpid(), "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "runtime": runtime()}
+            "runtime": metadata}
