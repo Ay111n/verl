@@ -71,7 +71,8 @@ Do not commit runtime products or machine configuration to public Git.
 
 This English-CoT route uses Tibetan questions/instructions, thinking-on, no
 English reference, context32768/output32000, temperature.6, top_p.95, top_k20,
-min_p0. Native benchmark scoring is reused. Fixed per-question seed
+min_p0. Native benchmark scoring is reused. Two independent TP1 replicas per model handle alternating canonical indices and
+reassemble exactly 666 unique outputs. Fixed per-question seed
 42+canonical-index is shared across four runs. Historical ON/OFF scores are
 contextual; the fresh SFT run supplies the paired baseline.
 
