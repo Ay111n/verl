@@ -77,3 +77,12 @@ Run (L20 inference environment; machine paths in configs/paths.json)
 The controller requires a passing smoke. While training, eval clients have no CUDA
 visibility and reuse GPU2. Only after training exits may a second worker use GPU0.
 All model generations run TP1; the task never requests any third GPU.
+
+Evaluation scheduling revision (2026-11-17 Beijing time)
+  All final S0/A/B evals submit 64 questions per RPC, with at most 16 active
+  sequences. Final results use eval/results/opd_math_ab_20261116/batch64.
+  Earlier partial batch16 S0 outputs remain separate and are not compared.
+  Training batch8 and all scientific settings remain unchanged. A verified
+  active answer trainer can be adopted with --adopt-answer-pid; it is not
+  restarted. The original formal protocol is preserved; execution_revision.json
+  records the scheduling change, source hashes and adopted process identity.
