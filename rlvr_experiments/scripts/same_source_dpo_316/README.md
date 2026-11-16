@@ -87,3 +87,10 @@ transitions, bootstrap accuracy-difference intervals and exact McNemar. Report
 extraction, truncation, format and output-length behavior. Training margins
 describe fitting, not generalization. One seed/short epoch is a feasibility
 pilot. No TEST inference or separate RLVR validation split.
+
+
+The optional validate_vllm_adapter.py check teacher-forces fixed native sequences:
+a zero-B adapter must reproduce no-adapter probabilities, and the completed
+trained adapter must have a nonzero effect. This validates the direct LoRA
+evaluation path without adding sampled training data. Its zero adapter is
+temporary and is not a registered trained model.
