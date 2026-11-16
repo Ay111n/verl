@@ -37,6 +37,15 @@
       "run_root": "/home/nlp/data/lyl/verl/rlvr_experiments/runs/opd_math_ab_20261116",
       "model_output": "/home/nlp/data/lyl/finetuning/model/rl/opd_math_ab_20261116",
       "eval_output": "/home/nlp/data/lyl/benchmark/eval/results/opd_math_ab_20261116"
+    },
+    "luffy_knowledge_388_l20": {
+      "benchmark_root": "/home/nlp/data/lyl/benchmark",
+      "finetuning_root": "/home/nlp/data/lyl/finetuning",
+      "model_path": "/home/nlp/data/lyl/finetuning/model/sft/en_cot_49800/merged/checkpoint-9000",
+      "python": "/opt/anaconda3/envs/inference/bin/python",
+      "train_data": "/home/nlp/data/lyl/finetuning/rl/final_data/luffy_knowledge_388_20261116/train.jsonl",
+      "run_root": "/home/nlp/data/lyl/verl/rlvr_experiments/runs/luffy_knowledge_388_20261116",
+      "model_output": "/home/nlp/data/lyl/finetuning/model/rl/luffy_knowledge_388_20261116"
     }
   }
 }
