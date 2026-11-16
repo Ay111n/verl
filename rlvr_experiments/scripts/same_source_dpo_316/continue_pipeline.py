@@ -31,7 +31,7 @@ def main():
                    OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false")
         output = a.root / "finetuning/model/rl" / plan["run"] / arm
         if phase == "training":
-            cmd = [sys.executable, "-m", "torch.distributed.run", "--standalone", "--nproc_per_node=2",
+            cmd = [sys.executable, "-m", "torch.distributed.run", "--standalone", "--nproc_per_node=2", "--",
                    str(script), "--data", plan["data_directory"], "--model", a.model,
                    "--run", str(a.run), "--output", str(output), "--arm", arm]
         else:
