@@ -94,3 +94,29 @@ a zero-B adapter must reproduce no-adapter probabilities, and the completed
 trained adapter must have a nonzero effect. This validates the direct LoRA
 evaluation path without adding sampled training data. Its zero adapter is
 temporary and is not a registered trained model.
+
+
+## Authorized step-40 to step-120 continuation
+
+continue_train.py restores the source adapter plus all Adam tensors and verifies
+the ordered trainable-parameter hash and optimizer tensor digest before updating.
+All 632 source sequence probabilities are recomputed and checked against archived
+step-40 scores (sum tolerance .05, per-token tolerance 1e-5). All three arms must
+pass before any updates. Original data, reference scores, lambda, gates, objective,
+batch size and clipping remain frozen. Epochs 2/3 use identical predeclared orders
+across arms; each repeats the original 40-update learning-rate cycle. Adam's step
+counter and moments continue. No lambda recalibration or data filtering occurs.
+
+At declared probe steps, autograd.grad measures DPO, alpha*NLL and raw auxiliary
+gradients. The actual update still uses the original combined loss.backward,
+global sum reduction and clipping. Diagnostics report norms, auxiliary/base ratio,
+gradient cosines, numerical reconstruction residual and actual Adam update norm.
+All 316 pairs are teacher-forced at steps 40/80/120; these are training diagnostics,
+not DEV generations. Checkpoints 80/120 retain adapter, tokenizer, Adam and RNG.
+
+continue_pipeline.py runs the three independent arms, then evaluates only each
+step-120 adapter via the benchmark wrapper's --run-name output namespace. SFT and
+step-40 DEV predictions remain frozen and are reused for comparisons. A machine
+run plan supplies explicit paths, GPU assignments and epoch orders; it is an
+ignored runtime artifact. Additional budget is 80 updates / 632 pair visits per
+arm, cumulative 120 updates / 948 visits to 316 unique pairs.

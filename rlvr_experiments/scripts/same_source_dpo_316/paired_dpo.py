@@ -26,7 +26,7 @@ def sha(path):
 def object_sha(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
-def load_model(path, seed=42, adapter=None):
+def load_model(path, seed=42, adapter=None, trainable_adapter=False):
     from transformers import AutoModelForCausalLM
     from peft import LoraConfig, get_peft_model, PeftModel
     random.seed(seed);torch.manual_seed(seed);torch.cuda.manual_seed_all(seed)
@@ -35,7 +35,7 @@ def load_model(path, seed=42, adapter=None):
         dtype=torch.bfloat16,attn_implementation="sdpa",disable_mmap=True,device_map={"":f"cuda:{torch.cuda.current_device()}"})
     model.config.use_cache=False
     if adapter:
-        model=PeftModel.from_pretrained(model,adapter,is_trainable=False)
+        model=PeftModel.from_pretrained(model,adapter,is_trainable=trainable_adapter)
     else:
         model=get_peft_model(model,LoraConfig(r=16,lora_alpha=32,lora_dropout=0.,
             target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
