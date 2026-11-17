@@ -31,7 +31,7 @@ def main():
     adapter,digest=checkpoint(model,opt,out,0,cfg);initial=adapter_hash(model)
     save(run/"actor_ready.json",{"pid":os.getpid(),"gpu":os.environ["CUDA_VISIBLE_DEVICES"],"runtime":runtime(),
         "initial_adapter_sha256":digest,"initial_trainable_hash":initial,"loading_seconds":time.monotonic()-start})
-    data=ROOT/"finetuning/rl/final_data"/cfg["name"]/"train.jsonl"
+    data=ROOT/cfg.get("training_data",f'finetuning/rl/final_data/{cfg["name"]}/train.jsonl')
     while not (data.parent/"manifest.json").exists():
         if time.time()>cfg["train_deadline_unix"]:raise TimeoutError("Data preparation exceeded training budget")
         time.sleep(1)
@@ -103,7 +103,7 @@ def main():
                 continue
             lp=response_logps_batch(model,[row["prompt_token_ids"]],[ids],
                 cfg["head_chunk"],cfg["likelihood_temperature"])[0]
-            term=demo_loss(lp,item["advantage"],cfg["gamma"])
+            term=(-cfg["reference_nll_weight"]*item["advantage"]*lp.mean() if cfg.get("reference_loss","shaped")=="advantage_nll" else demo_loss(lp,item["advantage"],cfg["gamma"]))
             (term/(4*len(batch))).backward()
             demos.append({"id":row["id"],"advantage":item["advantage"],"tokens":len(ids),
                 "loss":float(term.detach()),"nll":float(-lp.detach().mean()),"gold_provided":row["demo"]["gold_provided"]})
