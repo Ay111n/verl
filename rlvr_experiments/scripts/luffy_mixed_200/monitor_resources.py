@@ -9,6 +9,7 @@ peak=previous.get("max_simultaneous_owned_gpus",0);observed=set(previous.get("ob
 while not cfg.get("strict_wall_budget",True) or time.time()<cfg["overall_deadline_unix"]:
     owners={w["pid"] for w in json.loads((run/"workers.json").read_text())}
     if (run/"owned_processes.json").exists():owners.update(json.loads((run/"owned_processes.json").read_text())["pids"])
+    if (run/"background_parallel_workers.json").exists():owners.update(w["pid"] for w in json.loads((run/"background_parallel_workers.json").read_text()))
     lookup=subprocess.check_output(["nvidia-smi","--query-gpu=index,uuid","--format=csv,noheader"],text=True)
     indices={v.strip():int(k) for k,v in (line.split(",") for line in lookup.splitlines())}
     raw=subprocess.check_output(["nvidia-smi","--query-compute-apps=pid,gpu_uuid,used_memory","--format=csv,noheader,nounits"],text=True)
