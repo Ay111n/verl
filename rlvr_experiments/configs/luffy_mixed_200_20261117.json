@@ -47,8 +47,7 @@
   "reference_deadline_unix": 1794933105,
   "rollout_gpus": [
     2,
-    3,
-    5
+    3
   ],
   "reference_gpus": [
     0,
@@ -76,5 +75,10 @@
     "ace_reason_math_b7eda5f693015d81c1562fba"
   ],
   "question_revision_manifest": "finetuning/rl/processed_data/luffy_mixed_200_20261117/question_revision1_manifest.json",
-  "checked_repair_hints": "finetuning/rl/processed_data/luffy_mixed_200_20261117/checked_repair_hints.json"
+  "checked_repair_hints": "finetuning/rl/processed_data/luffy_mixed_200_20261117/checked_repair_hints.json",
+  "reference_temperature": 0.2,
+  "allow_cpu_verified_complete_correction": true,
+  "training_gpu_count": 3,
+  "background_reference_gpu": 5,
+  "background_sampling_questions": 1800
 }

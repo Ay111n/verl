@@ -1,4 +1,4 @@
-"""Four-hour mixed200 controller; all child processes remain within four GPUs."""
+"""Mixed200 train/evaluation controller; a reserved worker may sample the full pool."""
 import argparse,json,os,signal,subprocess,sys,time,traceback
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[4]
@@ -22,7 +22,8 @@ def main():
     cfg=json.loads(a.config.read_text());name=cfg["name"];run=PROJECT/"runs"/name
     workers=json.loads((run/"workers.json").read_text())
     reference=json.loads((run/"reference_process.json").read_text())["pid"]
-    owned=[x["pid"] for x in workers]+[reference]
+    training_workers=workers[1:1+len(cfg["rollout_gpus"])]
+    owned=[workers[0]["pid"]]+[x["pid"] for x in training_workers]+[reference]
     def save_owned():save(run/"owned_processes.json",{"pids":owned,"marker":name,"max_concurrent_gpus":4})
     save_owned()
     def stage(value,**extra):
@@ -83,12 +84,12 @@ def main():
         assert actor.returncode==0,"Training actor failed; see train.log"
         complete=json.loads((run/"complete.json").read_text())
         stage("releasing_sampling_gpus",completed_steps=complete["steps"],question_visits=complete["question_visits"])
-        for worker in workers[1:]:
+        for worker in training_workers:
             rpc(Path(worker["rpc"]),{"request_id":"shutdown-training-sampler","mode":"shutdown"},timeout=60)
         end=time.time()+90
-        while any(alive(w["pid"]) for w in workers[1:]):
+        while any(alive(w["pid"]) for w in training_workers):
             if time.time()>end:
-                for w in workers[1:]:stop(w["pid"],name)
+                for w in training_workers:stop(w["pid"],name)
                 break
             time.sleep(1)
         time.sleep(5)

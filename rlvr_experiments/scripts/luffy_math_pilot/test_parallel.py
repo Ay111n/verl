@@ -16,10 +16,11 @@ class TestParallel(unittest.TestCase):
     def test_exact_reassembly(self):
         def fake_rpc(path,req,timeout):
             return {"adapter_sha256":"hash","elapsed_seconds":1,"records":list(reversed(req["prompts"]))}
-        with tempfile.TemporaryDirectory() as d,patch.object(common,"rpc",side_effect=fake_rpc):
-            req=self.request();got=common.rpc_parallel(Path(d),req,[Path(d)/str(i) for i in range(3)])
-            self.assertEqual(got["records"],req["prompts"])
-            self.assertEqual([r["responses"] for r in got["parallel_workers"]],[4,4,4])
+        for count in (2,3):
+            with self.subTest(workers=count),tempfile.TemporaryDirectory() as d,patch.object(common,"rpc",side_effect=fake_rpc):
+                req=self.request();got=common.rpc_parallel(Path(d),req,[Path(d)/str(i) for i in range(count)])
+                self.assertEqual(got["records"],req["prompts"])
+                self.assertEqual([r["responses"] for r in got["parallel_workers"]],[12//count]*count)
     def test_wrong_adapter_rejected(self):
         def fake_rpc(path,req,timeout):return {"adapter_sha256":"wrong","elapsed_seconds":1,"records":req["prompts"]}
         with tempfile.TemporaryDirectory() as d,patch.object(common,"rpc",side_effect=fake_rpc),self.assertRaises(AssertionError):

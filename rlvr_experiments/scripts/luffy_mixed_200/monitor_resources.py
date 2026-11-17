@@ -26,5 +26,7 @@ while not cfg.get("strict_wall_budget",True) or time.time()<cfg["overall_deadlin
              "limit":cfg["maximum_concurrent_gpus"],"within_limit":peak<=cfg["maximum_concurrent_gpus"]}
     (run/"gpu_usage_summary.json").write_text(json.dumps(summary,indent=2)+"\n")
     assert summary["within_limit"],summary
-    if (run/"pipeline_complete.json").exists() or (run/"pipeline_failure.json").exists():break
+    main_done=(run/"pipeline_complete.json").exists() or (run/"pipeline_failure.json").exists()
+    background_done=not (run/"background_sampling_contract.json").exists() or (run/"background_sampling_complete.json").exists()
+    if main_done and background_done:break
     time.sleep(30)
