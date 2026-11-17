@@ -32,6 +32,12 @@ def main():
     (-sum(x.mean() for x in warm)/len(warm)).backward();del warm
     model.zero_grad(set_to_none=True);torch.cuda.synchronize();gc.collect();torch.cuda.empty_cache()
     accumulated=[torch.zeros_like(v) for v in params];local_cfg={**cfg,"max_grad_norm":float("inf")}
+    # Exclude any preceding diagnostic request from the timed interval.
+    idle_deadline=time.monotonic()+900
+    while any(not f.with_name(f.name.replace(".request.",".response.")).exists()
+              for rpc in args.rpc for f in rpc.glob("*.request.json")):
+        assert time.monotonic()<idle_deadline,"Sampler queue did not become idle"
+        time.sleep(.1)
     torch.cuda.reset_peak_memory_stats();requests=[];started=time.monotonic();started_unix=time.time()
     for shard,rpc in enumerate(args.rpc):
         req={**source,"request_id":f"perf-stream-{shard}","stream_groups":True,

@@ -149,7 +149,7 @@ The candidate implementation is separate from the running formal train.py:
   Total192 new diagnostic answers plus two short scoring warmups. No B/C
   training, DEV, or model updates are started. B/C remain held afterward.
 
-CPU acceptance:104 tests, including five new mask/gradient/order tests and the
+CPU acceptance:105 tests, including six new mask/gradient/order tests and the
 existing99 objective/verifier checks. These are not GPU throughput results.
 GPU acceptance requires gradient cosine>=.999, relative norm change<=.02,
 relative gradient difference<=.05, and actor logprob MAE<=.03 on real outputs.
@@ -177,3 +177,17 @@ answers or model updates. It reports actual two-actor time instead of dividing
 a one-actor measurement by two. The original serial-stage baseline is the sum
 of separately measured generation and training times; the report explicitly
 identifies it as such. All streamed timings still use two samplers and one actor.
+
+Supplementary scheduling probe
+While the actor benchmarks ran, an additional64-answer two-sampler probe used
+historical step51 response-token totals to balance16 questions into two groups
+of8 (largest estimated costs first, then the lower-cost shard with capacity).
+Every question retained its four original seeds and generation parameters.
+The exact prior hash, placement and requests are retained in the run folder.
+This adds64 diagnostic answers to the main192-answer suite. It does not change
+formal training or the even/odd placement in the streaming benchmark. The latter
+waits for empty worker queues before starting its timed interval.
+
+The added SDPA CPU check covers causal right-padding and gradients in FP32.
+CPU equivalence alone does not approve a BF16 GPU microbatch configuration;
+the recorded per-candidate GPU thresholds must pass, without relaxed tolerances.

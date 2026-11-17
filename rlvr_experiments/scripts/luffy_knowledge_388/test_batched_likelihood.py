@@ -110,3 +110,15 @@ def test_full_update_preserves_question_and_response_weights(monkeypatch):
         for key in av:
             for field in ("advantage","policy_loss","sampled_kl","mean_logprob"):
                 assert abs(av[key][field]-bv[key][field])<1e-5
+
+
+def test_sdpa_causal_padding_and_gradients():
+    # Exercise the same HF attention-dispatch path as the GPU model, in FP32.
+    model,prompts,responses=model_and_data();model.set_attn_implementation("sdpa")
+    params=tuple(model.parameters())
+    single=[response_logps(model,p,r,chunk_size=2,temperature=.6) for p,r in zip(prompts,responses)]
+    batch=response_logps_batch(model,prompts,responses,chunk_size=5,temperature=.6)
+    for left,right in zip(single,batch):torch.testing.assert_close(left,right,rtol=2e-5,atol=2e-5)
+    a=torch.autograd.grad(sum(x.mean() for x in single),params)
+    b=torch.autograd.grad(sum(x.mean() for x in batch),params)
+    for left,right in zip(a,b):torch.testing.assert_close(left,right,rtol=3e-4,atol=3e-6)
