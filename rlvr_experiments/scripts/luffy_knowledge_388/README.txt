@@ -169,3 +169,11 @@ seeing it. The batched helper therefore omits an explicit padding mask, retainin
 torch SDPA's causal Flash/GQA path. The CPU tests compare real response values
 and A/B/C gradients against unpadded sequences, including token0 inside actual
 content and unequal prompt/response lengths. This is not left-padding inference.
+
+Comparable original resource allocation
+benchmark_legacy_dp.py replays the already-produced single-sampler64 outputs
+through the unmodified train.update C loss on two actors. This adds no sampled
+answers or model updates. It reports actual two-actor time instead of dividing
+a one-actor measurement by two. The original serial-stage baseline is the sum
+of separately measured generation and training times; the report explicitly
+identifies it as such. All streamed timings still use two samplers and one actor.

@@ -116,10 +116,27 @@ def main():
             while not file.exists():assert time.monotonic()<deadline;time.sleep(.2)
             assert json.loads(file.read_text())["stopped"]
         for child in workers.values():child.wait(timeout=120)
+        workers.clear()
+        state("measuring_original_two_actor_update_on_existing_outputs")
+        deadline=time.monotonic()+120
+        while True:
+            used=[int(subprocess.check_output(["nvidia-smi","-i",str(g),"--query-gpu=memory.used","--format=csv,noheader,nounits"],text=True).strip()) for g in (3,4)]
+            if max(used)<100:break
+            assert time.monotonic()<deadline,"Benchmark actor GPUs not released; no other process was touched"
+            time.sleep(2)
+        legacy=launch("legacy-dp-benchmark",[py,"-m","torch.distributed.run","--standalone","--nproc_per_node=2","--",
+            str(scripts/"benchmark_legacy_dp.py"),"--request",str(roots[0]/"perf-single-64.request.json"),
+            "--response",str(roots[0]/"perf-single-64.response.json"),"--out",str(out/"legacy_dp_benchmark")],"3,4")
+        wait_child("legacy-dp-benchmark",legacy)
+        legacy_report=json.loads((out/"legacy_dp_benchmark/summary.json").read_text());assert legacy_report["passed"]
+        assert not (run/"B/initialization.json").exists() and not (run/"C/initialization.json").exists()
         summary={"passed":True,"completed_unix":time.time(),"A_completed_steps":75,"B_C_still_held":True,
             "parameter_updates_performed":False,"new_answer_rollouts":192,"warmup_score_requests":2,
             "single_sampling":single_summary,"dual_sampling":dual_summary,
             "actor_benchmark":actor_report,"selected_batching":best,"streaming_benchmark":stream_report,
+            "legacy_two_actor_benchmark":legacy_report,
+            "legacy_nonoverlapped_measured_stage_sum_seconds":single_summary["wall_seconds"]+legacy_report["seconds"],
+            "legacy_stage_sum_is_not_a_separate_continuous_full_run":True,
             "scope":"Bounded performance/numerical acceptance on the original three GPU slots after A; no formal B/C training or DEV evaluation."}
         save(out/"performance_acceptance.json",summary);state("complete")
     except Exception:
