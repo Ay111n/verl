@@ -35,7 +35,20 @@ def main():
         data=ROOT/"finetuning/rl/final_data"/name
         while not (data/"manifest.json").exists():
             if not alive(reference):
-                raise RuntimeError("Reference preparation exited without all200 verified; fixed IDs retained, no training launched")
+                partial=ROOT/"finetuning/rl/processed_data"/name/"accepted_references.partial.jsonl"
+                audit_path=partial.parent/"reference_audit.jsonl"
+                attempts=[json.loads(line)["attempt"] for line in audit_path.read_text().splitlines()] if audit_path.exists() else []
+                if time.time()+180<cfg["reference_deadline_unix"] and partial.exists() and max(attempts,default=-1)<cfg["repair_rounds"]:
+                    stage("resuming_failed_reference_questions",fixed_questions=200)
+                    resumed=subprocess.Popen([PY,"-u",str(ROOT/"finetuning/rl/scripts/prepare_mixed200_references.py"),
+                        "--config",str(a.config),"--resume"],env=dict(os.environ,CUDA_VISIBLE_DEVICES=""),
+                        stdout=(run/"reference_preparation.log").open("a"),stderr=subprocess.STDOUT,
+                        cwd=str(ROOT),start_new_session=True)
+                    reference=resumed.pid;owned.append(reference);save_owned()
+                    save(run/"reference_process.json",{"pid":reference,"resumed_unix":time.time()})
+                    stage("preparing_references",fixed_questions=200,resumed=True)
+                else:
+                    raise RuntimeError("Reference preparation ended before all200 verified; fixed IDs retained, no training launched")
             if time.time()>cfg["reference_deadline_unix"]+15:
                 raise TimeoutError("Reference preparation exceeded reserved allocation")
             time.sleep(2)

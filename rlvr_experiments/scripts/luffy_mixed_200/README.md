@@ -5,7 +5,7 @@ fully re-solve failed/missing traces, at most four GPUs, entire run within four 
 full666DEV versus the frozen S0 baseline. This overrides legacy R0-only/no-auto-train
 rules only for this run. No TEST, no ablations, no changes to the frozen200 IDs.
 
-Start 2026-11-17 18:31:45 Asia/Shanghai; deadline22:31:45. Reference allocation55min;
+Start 2026-11-17 18:31:45 Asia/Shanghai; deadline22:31:45. Reference allocation up to70min;
 training stops admitting batches by21:01:45; final666DEV retains32768/32000 ON,
 T0.6/top_p0.95/top_k20, seed42+canonical index and the same two-replica jobs as S0.
 Four reference workers use0/2/3/5, then actor0+samplers2/3/5, then eval0/2.
@@ -34,3 +34,5 @@ not prove every reasoning step; gold-conditioned traces can rationalize the answ
 
 Reusable entrypoints remain in scripts/luffy_math_pilot; this folder contains only
 the bounded mixed200 lifecycle. Data and model artifacts are excluded from Git.
+
+Failed-reference retries can resume from already accepted rows without restarting workers or changing fixed IDs. From round4, two fixed protocol-prefix tokens open the reasoning block; every reasoning and final-answer token is regenerated. Prefix IDs are recorded separately, and no final answer is patched. The overall four-hour deadline and training/evaluation reservations remain unchanged.
