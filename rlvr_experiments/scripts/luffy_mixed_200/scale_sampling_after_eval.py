@@ -90,6 +90,8 @@ def main():
 
     stage("waiting_for_complete666dev")
     while True:
+        if (run / "background_sampling_stopped.json").exists():
+            stage("stopped_by_user"); return
         if (run / "background_sampling_complete.json").exists():
             stage("already_complete_no_pending_samples"); return
         if (run / "pipeline_failure.json").exists():
