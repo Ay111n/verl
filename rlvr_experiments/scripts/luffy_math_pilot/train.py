@@ -3,7 +3,7 @@ import argparse,hashlib,json,math,os,random,time
 from pathlib import Path
 import torch
 from common import (ROOT,PROJECT,load_model,read_rows,save,sha,adapter_hash,runtime,response_logps_batch,
-                    verify,advantages,online_loss,demo_loss,rpc,norm)
+                    verify,advantages,online_loss,demo_loss,rpc,rpc_parallel,norm)
 def checkpoint(model,opt,out,step,cfg):
     dest=out/f"checkpoint-{step:04d}";dest.mkdir(parents=True,exist_ok=True)
     model.save_pretrained(dest,safe_serialization=True)
@@ -37,6 +37,7 @@ def main():
         time.sleep(1)
     rows=read_rows(data);manifest=json.loads((data.parent/"manifest.json").read_text())
     assert sha(data)==manifest["train_sha256"]
+    assert len(rows)==cfg.get("strict_question_count",len(rows))
     random.Random(cfg["order_seed"]).shuffle(rows)
     batches=[rows[i:i+cfg["batch_size"]] for i in range(0,len(rows),cfg["batch_size"])]
     assert cfg["epochs"]==1
@@ -57,7 +58,11 @@ def main():
         request={"request_id":f"train-{step:04d}","mode":"generate","adapter":str(adapter),
             "adapter_sha256":digest,"prompts":prompts,"return_logprobs":True,
             **{k:cfg[k] for k in ["max_new_tokens","temperature","top_p","top_k"]}}
-        generated=rpc(run/"rpc",request,timeout=min(3600,max(60,remaining)))
+        if cfg.get("rollout_gpus"):
+            workers=[run/"rpc_workers"/f"worker{i+1}" for i in range(len(cfg["rollout_gpus"]))]
+            generated=rpc_parallel(run/"rpc",request,workers,timeout=min(3600,max(60,remaining)))
+        else:
+            generated=rpc(run/"rpc",request,timeout=min(3600,max(60,remaining)))
         assert generated["adapter_sha256"]==digest and len(generated["records"])==3*len(batch)
         items=[];groups=[];demonstrations=[]
         for i,row in enumerate(batch):
