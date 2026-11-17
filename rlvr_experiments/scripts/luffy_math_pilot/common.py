@@ -77,3 +77,17 @@ def rpc_parallel(root, request, workers, timeout=3600):
            "records":[records[key] for key in keys],"elapsed_seconds":time.monotonic()-start,"parallel_workers":timings}
     save(root/(request["request_id"]+".response.json"),value)
     return value
+
+
+def verified_adapter(path, expected, timeout=10):
+    """Bounded re-read; never accept an adapter with an unexpected digest."""
+    path=Path(path);end=time.monotonic()+timeout;attempts=[]
+    while True:
+        actual=sha(path)
+        if actual==expected:return actual
+        attempts.append({"actual":actual,"size":path.stat().st_size,"mtime_ns":path.stat().st_mtime_ns})
+        print(json.dumps({"event":"adapter_hash_mismatch","path":str(path),"expected":expected,
+                          "attempt":len(attempts),**attempts[-1]}),flush=True)
+        if time.monotonic()>=end:
+            raise RuntimeError(f"Adapter hash mismatch: {path}; expected={expected}; attempts={attempts}")
+        time.sleep(.5)

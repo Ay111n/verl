@@ -1,7 +1,7 @@
 """Single dedicated GPU sampler with immutable adapters and per-row seeds."""
 import argparse,json,os,time,traceback
 from pathlib import Path
-from common import save,sha
+from common import save,sha,verified_adapter
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--model",required=True);ap.add_argument("--rpc",type=Path,required=True)
@@ -28,7 +28,7 @@ def main():
                 if active is not None:assert llm.llm_engine.remove_lora(active);active=None
                 adapter=r.get("adapter");lora=None;digest=None
                 if adapter:
-                    digest=sha(Path(adapter)/"adapter_model.safetensors");assert digest==r["adapter_sha256"]
+                    digest=verified_adapter(Path(adapter)/"adapter_model.safetensors",r["adapter_sha256"])
                     version+=1;active=version;lora=LoRARequest(f"math_mix_{version}",version,adapter)
                 params=[]
                 for row in r["prompts"]:
