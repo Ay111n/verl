@@ -122,3 +122,42 @@ and logged completion tails. It loads no model and performs no new sampling or
 optimizer updates. Larger-data costs and hypothetical speedups are explicitly
 projections, not performance benchmark results. It saves source hashes and a
 worker-log prefix snapshot so later appends do not invalidate the evidence.
+
+Authorized hold and bounded throughput acceptance, 2026-11-17
+User chose: finish A at75, hold B/C, optimize first. hold_after_a.py takes over
+only the identified pipeline/analysis controllers, lets the active A process
+finish unchanged, then shuts down its dedicated sampler. Models and optimizer
+checkpoints are retained. Do not restart run_pipeline.py while this hold applies.
+
+The candidate implementation is separate from the running formal train.py:
+- batched_likelihood.py: right-padded independent sequences and response-only
+  head computation, with the same temperature, causal/EOS masks and sequence
+  means. batched_update.py length-buckets microbatches without changing the
+  actual question/response weights, KL, demonstration terms or gradients.
+- stream_worker.py publishes only complete four-response question groups using
+  the installed vLLM enqueue/step interface. A full-batch optimizer update still
+  waits for every question; this is not a stale-policy asynchronous algorithm.
+- benchmark_actor.py compares the original routine to microbatches1/2/4 and
+  larger head chunks on the immutable existing step51 data and checkpoint50.
+  The optimizer is a no-op: no parameter update is performed.
+- benchmark_streaming.py tests two samplers plus one actor on16 questions, then
+  replays exactly those outputs to compare the accumulated full-batch gradient.
+  The component-sum timing is a counterfactual, not another timed full run.
+- run_performance_acceptance.py waits for hold_complete.json and release of
+  this task's GPUs3/4/5. It runs one64-output single-sampler batch, the same
+  input/seed budget across two samplers, and one64-output overlapped batch.
+  Total192 new diagnostic answers plus two short scoring warmups. No B/C
+  training, DEV, or model updates are started. B/C remain held afterward.
+
+CPU acceptance:104 tests, including five new mask/gradient/order tests and the
+existing99 objective/verifier checks. These are not GPU throughput results.
+GPU acceptance requires gradient cosine>=.999, relative norm change<=.02,
+relative gradient difference<=.05, and actor logprob MAE<=.03 on real outputs.
+Real Adam moments are excluded from the gradient benchmark and disclosed in
+its memory report. Every optimization result must state its device count,
+actual token count, sampled length/termination outcomes and measured scope.
+Same seeds do not guarantee bitwise identical GPU outputs across batch shapes.
+The streaming benchmark currently verifies the combined gradient; production
+integration must also retain the formal per-step online/demo gradient diagnostics.
+These candidates have not replaced the formal trainer or justified a speedup
+claim until performance_acceptance.json and its component results are checked.
