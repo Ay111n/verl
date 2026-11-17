@@ -43,7 +43,8 @@
   "eval_baseline": "same_source_dpo_316_20261116/sft (355/666); exact prompt/data/seed protocol check required",
   "rollout_gpus": [
     2,
-    3
+    3,
+    5
   ],
   "reference_gpus": [
     0,
@@ -74,8 +75,8 @@
   "checked_repair_hints": "finetuning/rl/processed_data/luffy_mixed_200_20261117/checked_repair_hints.json",
   "reference_temperature": 0.2,
   "allow_cpu_verified_complete_correction": true,
-  "training_gpu_count": 3,
-  "background_reference_gpu": 5,
+  "training_gpu_count": 4,
+  "background_reference_gpu": null,
   "background_sampling_questions": 0,
   "training_data": "finetuning/rl/final_data/luffy_mixed_200_20261117/train.jsonl",
   "reference_loss": "advantage_nll",
