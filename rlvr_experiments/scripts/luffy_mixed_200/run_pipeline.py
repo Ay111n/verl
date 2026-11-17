@@ -29,7 +29,8 @@ def main():
         s={"stage":value,"time_unix":time.time(),**extra};save(run/"pipeline_status.json",s);print(json.dumps(s),flush=True)
     def alarm(signum,frame):raise TimeoutError("End-to-end deadline: preserving final three minutes for delivery")
     signal.signal(signal.SIGALRM,alarm)
-    signal.alarm(max(1,int(cfg["overall_deadline_unix"]-time.time()-180)))
+    if cfg.get("strict_wall_budget",True):
+        signal.alarm(max(1,int(cfg["overall_deadline_unix"]-time.time()-180)))
     try:
         stage("preparing_references",fixed_questions=200)
         data=ROOT/"finetuning/rl/final_data"/name
@@ -52,6 +53,9 @@ def main():
             if time.time()>cfg["reference_deadline_unix"]+15:
                 raise TimeoutError("Reference preparation exceeded reserved allocation")
             time.sleep(2)
+        while (run/"reference_quality_hold.json").exists() and json.loads((run/"reference_quality_hold.json").read_text()).get("training_hold"):
+            stage("reference_quality_hold",reason="Known inconsistent question requires approved revision before training")
+            time.sleep(30)
         manifest=json.loads((data/"manifest.json").read_text());assert manifest["training_questions"]==200
         while alive(reference):time.sleep(.5)
         stage("releasing_reference_gpu_for_actor",reference_sources=manifest["source_counts"])
@@ -62,13 +66,18 @@ def main():
             time.sleep(1)
         time.sleep(5)
         log=(run/"train.log").open("w")
-        actor=subprocess.Popen([PY,"-u",str(PROJECT/"scripts/luffy_math_pilot/train.py"),"--config",str(a.config)],
+        actor_config=a.config
+        if not cfg.get("strict_wall_budget",True):
+            cfg["train_deadline_unix"]=time.time()+14400
+            actor_config=run/"effective_training_config.json"
+            save(actor_config,cfg)
+        actor=subprocess.Popen([PY,"-u",str(PROJECT/"scripts/luffy_math_pilot/train.py"),"--config",str(actor_config)],
             env=dict(os.environ,CUDA_VISIBLE_DEVICES=str(cfg["actor_gpu"]),TOKENIZERS_PARALLELISM="false"),
             stdout=log,stderr=subprocess.STDOUT,cwd=str(ROOT),start_new_session=True)
         owned.append(actor.pid);save_owned();save(run/"actor_process.json",{"pid":actor.pid,"gpu":cfg["actor_gpu"]})
         stage("training",questions=200,planned_updates=13,actor_gpu=cfg["actor_gpu"],rollout_gpus=cfg["rollout_gpus"])
         while actor.poll() is None:
-            if time.time()>cfg["train_deadline_unix"]+300:
+            if cfg.get("strict_wall_budget",True) and time.time()>cfg["train_deadline_unix"]+300:
                 raise TimeoutError("Training exceeded its allocation; evaluation reservation protected")
             time.sleep(2)
         assert actor.returncode==0,"Training actor failed; see train.log"

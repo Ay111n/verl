@@ -48,8 +48,9 @@ def main():
     for step,batch in enumerate(batches,1):
         remaining=cfg["train_deadline_unix"]-time.time()
         estimated=1.25*max((s["step_seconds"] for s in history[-2:]),default=900)+60
-        if remaining<estimated:
+        if cfg.get("strict_wall_budget",True) and remaining<estimated:
             stop_reason="predeclared_wall_budget_before_next_batch";break
+        if not cfg.get("strict_wall_budget",True):remaining=max(3600,remaining)
         before=time.monotonic();prompts=[]
         for row in batch:
             for j in range(3):

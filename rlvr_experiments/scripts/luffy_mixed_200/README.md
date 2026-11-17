@@ -35,4 +35,6 @@ not prove every reasoning step; gold-conditioned traces can rationalize the answ
 Reusable entrypoints remain in scripts/luffy_math_pilot; this folder contains only
 the bounded mixed200 lifecycle. Data and model artifacts are excluded from Git.
 
-Failed-reference retries can resume from already accepted rows without restarting workers or changing fixed IDs. From round4, two fixed protocol-prefix tokens open the reasoning block; every reasoning and final-answer token is regenerated. Prefix IDs are recorded separately, and no final answer is patched. The overall four-hour deadline and training/evaluation reservations remain unchanged.
+Failed-reference retries can resume from already accepted rows without restarting workers or changing fixed IDs. From round4, two fixed protocol-prefix tokens open the reasoning block; every reasoning and final-answer token is regenerated. Prefix IDs are recorded separately, and no final answer is patched. The initial deadline was subsequently relaxed by the explicit user override below.
+
+Latest user override: all200 references are mandatory; the original four-hour stop is relaxed. GPU concurrency remains capped at4. No subset fallback is authorized. Finish the full200 reference set, then the fixed one-epoch13-update plan and complete666DEV; original wall-clock target stays in the config for reporting, but no longer truncates training/evaluation. Reference generation escalated from8K to16K for pending cases; the student8K and eval32K caps are unchanged. Actual per-request budgets and prefix handling remain in the audit.

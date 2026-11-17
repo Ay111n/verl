@@ -27,8 +27,8 @@
   "entropy_coef": 0,
   "advantage_std_normalization": false,
   "loss_aggregation": "mean across 4 response means per question then mean across questions; prompt/padding excluded; EOS included",
-  "repair_rounds": 10,
-  "repair_max_new_tokens": 8192,
+  "repair_rounds": 24,
+  "repair_max_new_tokens": 16384,
   "repair_temperature": 0.6,
   "actor_gpu": 0,
   "maximum_concurrent_gpus": 4,
@@ -44,7 +44,7 @@
   "eval_dataset": "full Tibetan 4-choice 666DEV; thinking ON; no English reference",
   "eval_entrypoint": "benchmark/eval/scripts/evaluate_same_source_dpo_316.py",
   "eval_baseline": "same_source_dpo_316_20261116/sft (355/666); exact prompt/data/seed protocol check required",
-  "reference_deadline_unix": 1794915705,
+  "reference_deadline_unix": 1794933105,
   "rollout_gpus": [
     2,
     3,
@@ -62,9 +62,14 @@
   ],
   "data_questions": "finetuning/rl/processed_data/mixed_rlvr_2000_200_20261117/questions_200.jsonl",
   "strict_question_count": 200,
-  "reference_max_new_tokens": 8192,
+  "reference_max_new_tokens": 16384,
   "model_source": "same original S0, no newly trained teacher",
   "reference_batch_size": 16,
   "eval_protocol": "previous mixed-GRPO ON 666DEV; exact S0 355/666 comparison",
-  "reference_resume_policy": "Retain accepted IDs; after round3, retry remaining IDs with a recorded fixed think-prefix until reserved deadline"
+  "reference_resume_policy": "Retain accepted IDs; after round3, retry remaining IDs with a recorded fixed think-prefix until reserved deadline",
+  "reference_budget_transition": "Initial requests use8192 total target tokens; new post-transition requests use16384; per-request logs/audits are authoritative",
+  "strict_wall_budget": false,
+  "user_requires_all_200": true,
+  "user_relaxed_time_budget": true,
+  "original_four_hour_deadline_unix": 1794925905
 }

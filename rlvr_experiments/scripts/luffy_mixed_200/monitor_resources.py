@@ -4,8 +4,9 @@ from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument("--config",type=Path,required=True);a=p.parse_args()
 cfg=json.loads(a.config.read_text());root=Path(__file__).resolve().parents[4]
 run=root/"verl/rlvr_experiments/runs"/cfg["name"]
-peak=0;observed=set();samples=0
-while time.time()<cfg["overall_deadline_unix"]:
+previous=json.loads((run/"gpu_usage_summary.json").read_text()) if (run/"gpu_usage_summary.json").exists() else {}
+peak=previous.get("max_simultaneous_owned_gpus",0);observed=set(previous.get("observed_gpus",[]));samples=previous.get("samples",0)
+while not cfg.get("strict_wall_budget",True) or time.time()<cfg["overall_deadline_unix"]:
     owners={w["pid"] for w in json.loads((run/"workers.json").read_text())}
     if (run/"owned_processes.json").exists():owners.update(json.loads((run/"owned_processes.json").read_text())["pids"])
     lookup=subprocess.check_output(["nvidia-smi","--query-gpu=index,uuid","--format=csv,noheader"],text=True)
