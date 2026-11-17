@@ -26,7 +26,13 @@ def record(row,out,scoring=False):
 def stream_generate(llm,prompts,params,lora,on_complete):
     ids=llm.enqueue(prompts,sampling_params=params,lora_request=lora,use_tqdm=False)
     assert len(ids)==len(prompts) and len(set(ids))==len(ids)
-    order={request_id:i for i,request_id in enumerate(ids)};outputs={}
+    # vLLM 0.19 returns randomized internal IDs from enqueue(), whereas
+    # RequestOutput carries the original external ID. Read the registered
+    # mapping before stepping, while every request state still exists.
+    states=llm.llm_engine.output_processor.request_states
+    external_ids=[states[request_id].external_req_id for request_id in ids]
+    assert len(set(external_ids))==len(ids) and all(external_ids)
+    order={request_id:i for i,request_id in enumerate(external_ids)};outputs={}
     # Same stepping loop as installed vLLM 0.19.1 LLM._run_engine; callbacks
     # publish finished responses only. All prompts are enqueued before stepping.
     while llm.llm_engine.has_unfinished_requests():
@@ -35,8 +41,8 @@ def stream_generate(llm,prompts,params,lora,on_complete):
             assert output.request_id in order and output.request_id not in outputs
             outputs[output.request_id]=output
             on_complete(order[output.request_id],output)
-    assert set(outputs)==set(ids)
-    return [outputs[request_id] for request_id in ids]
+    assert set(outputs)==set(external_ids)
+    return [outputs[request_id] for request_id in external_ids]
 
 
 def main():

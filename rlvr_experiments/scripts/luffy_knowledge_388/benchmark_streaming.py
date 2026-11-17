@@ -13,7 +13,8 @@ import batched_update
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--out",type=Path,required=True)
     parser.add_argument("--rpc",type=Path,nargs=2,required=True)
-    parser.add_argument("--micro-batch",type=int,default=4);parser.add_argument("--head-chunk",type=int,default=512)
+    parser.add_argument("--micro-batch",type=int,default=1);parser.add_argument("--head-chunk",type=int,default=512)
+    parser.add_argument("--readiness-check",type=Path)
     args=parser.parse_args()
     assert not args.out.exists() or not any(args.out.iterdir()), "Use an empty output directory for a new benchmark attempt"
     args.out.mkdir(parents=True,exist_ok=True)
@@ -32,6 +33,12 @@ def main():
     (-sum(x.mean() for x in warm)/len(warm)).backward();del warm
     model.zero_grad(set_to_none=True);torch.cuda.synchronize();gc.collect();torch.cuda.empty_cache()
     accumulated=[torch.zeros_like(v) for v in params];local_cfg={**cfg,"max_grad_norm":float("inf")}
+    if args.readiness_check:
+        ready_deadline=time.monotonic()+1200
+        while not args.readiness_check.exists():
+            assert time.monotonic()<ready_deadline,"Workers did not pass their streaming interface check"
+            time.sleep(.2)
+        assert json.loads(args.readiness_check.read_text())["passed"]
     # Exclude any preceding diagnostic request from the timed interval.
     idle_deadline=time.monotonic()+900
     while any(not f.with_name(f.name.replace(".request.",".response.")).exists()
@@ -82,6 +89,7 @@ def main():
     final_generated={"records":[x for i in range(16) for x in all_records[i]],
         "adapter_sha256":source["adapter_sha256"],"elapsed_seconds":max(x["elapsed_seconds"] for x in responses)}
     save(args.out/"combined_streamed_outputs.json",final_generated)
+    save(args.out/"stream_phase_complete.json",{"end_to_end_seconds":elapsed,"completed_unix":time.time(),"parameters_unchanged":True})
     # Replay exactly the same outputs without streaming to verify the full-batch gradient.
     del accumulated;model.zero_grad(set_to_none=True);gc.collect();torch.cuda.empty_cache();torch.cuda.reset_peak_memory_stats()
     replay_start=time.monotonic()

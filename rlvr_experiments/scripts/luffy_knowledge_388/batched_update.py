@@ -18,7 +18,7 @@ def batches(items,micro_batch,max_padded_tokens=32768):
     if group:yield group
 
 
-def update(model,opt,params,batch,generated,arm,cfg,rank,world,number,micro_batch=4,head_chunk=512):
+def update(model,opt,params,batch,generated,arm,cfg,rank,world,number,micro_batch=1,head_chunk=512):
     started=time.monotonic();opt.zero_grad(set_to_none=True)
     rewards=[];items=[];stats=[];demo_stats=[]
     for i,row in enumerate(batch):

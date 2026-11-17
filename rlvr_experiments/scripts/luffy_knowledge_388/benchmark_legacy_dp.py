@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--request",type=Path,required=True)
     parser.add_argument("--response",type=Path,required=True)
     parser.add_argument("--out",type=Path,required=True)
+    parser.add_argument("--start-gate",type=Path)
     args=parser.parse_args();rank,world=setup_dist();assert world==2
     if rank==0:
         assert not args.out.exists() or not any(args.out.iterdir()), "Use a new empty benchmark directory"
@@ -36,6 +37,11 @@ def main():
     model.train();lp=response_logps(model,warm["prompt_token_ids"],warm["response_token_ids"],cfg["chunk_size"],temperature=cfg["likelihood_temperature"])
     (-lp.mean()).backward();del lp
     model.zero_grad(set_to_none=True);torch.cuda.synchronize();gc.collect();torch.cuda.empty_cache();torch.cuda.reset_peak_memory_stats()
+    if args.start_gate:
+        deadline=time.monotonic()+1800
+        while not args.start_gate.exists():
+            assert time.monotonic()<deadline,"Timed out waiting for isolated timed interval"
+            time.sleep(.2)
     barrier();started=time.monotonic()
     result=train.update(model,opt,params,batch,generated,"C",cfg,rank,world,1)
     barrier();elapsed=time.monotonic()-started

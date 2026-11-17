@@ -149,7 +149,7 @@ The candidate implementation is separate from the running formal train.py:
   Total192 new diagnostic answers plus two short scoring warmups. No B/C
   training, DEV, or model updates are started. B/C remain held afterward.
 
-CPU acceptance:105 tests, including six new mask/gradient/order tests and the
+CPU acceptance:106 tests, including seven new mask/gradient/order tests and the
 existing99 objective/verifier checks. These are not GPU throughput results.
 GPU acceptance requires gradient cosine>=.999, relative norm change<=.02,
 relative gradient difference<=.05, and actor logprob MAE<=.03 on real outputs.
@@ -191,3 +191,20 @@ waits for empty worker queues before starting its timed interval.
 The added SDPA CPU check covers causal right-padding and gradients in FP32.
 CPU equivalence alone does not approve a BF16 GPU microbatch configuration;
 the recorded per-candidate GPU thresholds must pass, without relaxed tolerances.
+
+Installed vLLM request-ID compatibility
+In vLLM0.19.1 enqueue() returns randomized internal request IDs, while the
+finished RequestOutput uses the original external ID. stream_worker.py reads
+that mapping from output_processor.request_states before processing results.
+The regression test exercises the installed InputProcessor.assign_request_id
+implementation. The first streaming attempt failed this mapping and its logs
+remain intact; it performed no optimizer update.
+retry_streaming_acceptance.py reuses all completed measurements and retries
+only streaming plus the original two-actor replay in a fresh namespace. Each
+sampler must first pass a four-response, eight-token streaming interface probe.
+Those eight short responses are interface checks, not training answers. Failed
+full requests are counted separately from completed diagnostic answers.
+Untimed legacy-model loading can overlap the offline numerical replay, but a
+gate prevents its measured update from running until the first actor exits.
+The accepted explicit microbatch size is1. Larger sizes remain experimental
+and must not be enabled unless both numerical and throughput checks justify it.
