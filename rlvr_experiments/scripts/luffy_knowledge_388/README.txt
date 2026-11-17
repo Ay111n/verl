@@ -114,3 +114,11 @@ CPU regression checks scaled normalization and analytic gradients; GPU smoke
 compares the optimized likelihood to dense logits/T and raw scores to vLLM.
 Official temperature implementation: Simplified-Reasoning/LUFFY commit
 01f4ae066249e6965ce0d5512ccdf99a12895c74, luffy/verl/verl/workers/actor/dp_actor.py.
+
+Read-only runtime audit
+audit_runtime.py --run-root <run> --max-step <completed-A-step> --out <directory>
+aggregates immutable completed updates, real generated token counts, stage times
+and logged completion tails. It loads no model and performs no new sampling or
+optimizer updates. Larger-data costs and hypothetical speedups are explicitly
+projections, not performance benchmark results. It saves source hashes and a
+worker-log prefix snapshot so later appends do not invalidate the evidence.
