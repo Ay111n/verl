@@ -60,7 +60,7 @@
     0,
     2
   ],
-  "data_questions": "finetuning/rl/processed_data/mixed_rlvr_2000_200_20261117/questions_200.jsonl",
+  "data_questions": "finetuning/rl/processed_data/luffy_mixed_200_20261117/questions_200_revision1.jsonl",
   "strict_question_count": 200,
   "reference_max_new_tokens": 16384,
   "model_source": "same original S0, no newly trained teacher",
@@ -71,5 +71,10 @@
   "strict_wall_budget": false,
   "user_requires_all_200": true,
   "user_relaxed_time_budget": true,
-  "original_four_hour_deadline_unix": 1794925905
+  "original_four_hour_deadline_unix": 1794925905,
+  "approved_removed_question_ids": [
+    "ace_reason_math_b7eda5f693015d81c1562fba"
+  ],
+  "question_revision_manifest": "finetuning/rl/processed_data/luffy_mixed_200_20261117/question_revision1_manifest.json",
+  "checked_repair_hints": "finetuning/rl/processed_data/luffy_mixed_200_20261117/checked_repair_hints.json"
 }
