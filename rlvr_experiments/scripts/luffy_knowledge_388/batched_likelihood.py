@@ -12,12 +12,14 @@ def response_logps_batch(model,prompts,responses,chunk_size=512,temperature=0.6,
     device=next(base.parameters()).device
     input_lengths=[len(p)+len(r)-1 for p,r in zip(prompts,responses)]
     tokens=torch.full((len(prompts),max(input_lengths)),pad_token_id,dtype=torch.long,device=device)
-    attention=torch.zeros_like(tokens)
     for i,(p,r,length) in enumerate(zip(prompts,responses,input_lengths)):
         tokens[i,:length]=torch.as_tensor(p+r[:-1],device=device)
-        attention[i,:length]=1
     positions=torch.arange(tokens.shape[1],device=device).unsqueeze(0).expand_as(tokens)
-    states=base.model(input_ids=tokens,attention_mask=attention,position_ids=positions,use_cache=False).last_hidden_state
+    # Every sequence is right-padded and only real response positions contribute
+    # to the loss. Causality prevents those positions from seeing any padding.
+    # Omitting an unnecessary explicit mask preserves torch SDPA Flash/GQA;
+    # an arbitrary padding mask otherwise expands KV heads and changes kernels.
+    states=base.model(input_ids=tokens,position_ids=positions,use_cache=False).last_hidden_state
     hidden=torch.cat([states[i,len(p)-1:len(p)+len(r)-1] for i,(p,r) in enumerate(zip(prompts,responses))])
     lengths=[len(r) for r in responses]
     target=torch.as_tensor([token for r in responses for token in r],device=device)

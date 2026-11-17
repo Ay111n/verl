@@ -59,11 +59,15 @@ def main():
             model.zero_grad(set_to_none=True)
             warm=sorted(generated["records"],key=lambda x:len(x["response_token_ids"]))[:micro]
             model.train()
-            if name.startswith("legacy"):
-                values=[original_single(model,warm[0]["prompt_token_ids"],warm[0]["response_token_ids"],128,temperature=.6)]
-            else:
-                values=original_batch(model,[x["prompt_token_ids"] for x in warm],[x["response_token_ids"] for x in warm],chunk,temperature=.6)
-            (-sum(x.mean() for x in values)/len(values)).backward();del values
+            with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profile:
+                if name.startswith("legacy"):
+                    values=[original_single(model,warm[0]["prompt_token_ids"],warm[0]["response_token_ids"],128,temperature=.6)]
+                else:
+                    values=original_batch(model,[x["prompt_token_ids"] for x in warm],[x["response_token_ids"] for x in warm],chunk,temperature=.6)
+                (-sum(x.mean() for x in values)/len(values)).backward();del values
+            attention_operators=sorted({x.key for x in profile.key_averages()
+                if any(label in x.key for label in ("scaled_dot_product","flash_attention","efficient_attention","cudnn_attention"))})
+            del profile
             torch.cuda.synchronize();captured.clear();model.zero_grad(set_to_none=True);gc.collect();torch.cuda.empty_cache();torch.cuda.reset_peak_memory_stats()
             started=time.monotonic();stage="measured_update"
             if name.startswith("legacy"):
@@ -75,7 +79,7 @@ def main():
             gradient=torch.cat([v.grad.detach().cpu().flatten() for v in params])
             item={"name":name,"passed":True,"arm":args.arm,"seconds":elapsed,
                 "peak_allocated_gib":record["peak_memory_by_rank"][0]["allocated_gib"],
-                "gradient_norm":record["grad_norm_before_clip"],"online_responses":64,
+                "gradient_norm":record["grad_norm_before_clip"],"online_responses":64,"warmup_attention_operators":attention_operators,
                 "online_tokens":sum(len(x["response_token_ids"]) for x in generated["records"]),
                 "demo_tokens":sum(len(r["demo"]["response_token_ids"]) for r in batch) if args.arm in ("B","C") else 0}
             if baseline_gradient is None:

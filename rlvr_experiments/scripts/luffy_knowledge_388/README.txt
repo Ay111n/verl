@@ -161,3 +161,11 @@ The streaming benchmark currently verifies the combined gradient; production
 integration must also retain the formal per-step online/demo gradient diagnostics.
 These candidates have not replaced the formal trainer or justified a speedup
 claim until performance_acceptance.json and its component results are checked.
+
+Right-padding attention detail
+Only real response positions contribute to the likelihood. Because all padding
+is strictly to the right, causal attention already prevents real positions from
+seeing it. The batched helper therefore omits an explicit padding mask, retaining
+torch SDPA's causal Flash/GQA path. The CPU tests compare real response values
+and A/B/C gradients against unpadded sequences, including token0 inside actual
+content and unequal prompt/response lengths. This is not left-padding inference.
