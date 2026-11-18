@@ -17,6 +17,7 @@ def main():
     save(a.rpc/"ready.json",{"pid":os.getpid(),"gpu":os.environ["CUDA_VISIBLE_DEVICES"],
         "model":a.model,"max_num_seqs":a.max_num_seqs,"max_model_len":32768})
     active=None;version=1000
+    loaded_request=None;loaded_digest=None
     while True:
         pending=[p for p in sorted(a.rpc.glob("*.request.json"),key=lambda p:p.stat().st_mtime)
                  if not p.with_name(p.name.replace(".request.",".response.")).exists()]
@@ -25,11 +26,27 @@ def main():
             r=json.loads(file.read_text());dest=file.with_name(file.name.replace(".request.",".response."));start=time.monotonic()
             try:
                 if r["mode"]=="shutdown":save(dest,{"request_id":r["request_id"],"stopped":True});return
-                if active is not None:assert llm.llm_engine.remove_lora(active);active=None
                 adapter=r.get("adapter");lora=None;digest=None
+                eager=r.get("preload_adapter",False)
                 if adapter:
                     digest=verified_adapter(Path(adapter)/"adapter_model.safetensors",r["adapter_sha256"])
-                    version+=1;active=version;lora=LoRARequest(f"math_mix_{version}",version,adapter)
+                if eager and digest and digest==loaded_digest:
+                    lora=loaded_request
+                else:
+                    if active is not None:
+                        assert llm.llm_engine.remove_lora(active)
+                    active=None;loaded_digest=None;loaded_request=None
+                    if adapter:
+                        version+=1;active=version;lora=LoRARequest(f"math_mix_{version}",version,adapter)
+                        if eager:
+                            assert llm.llm_engine.add_lora(lora)
+                            assert active in llm.llm_engine.list_loras()
+                            loaded_digest=digest;loaded_request=lora
+                if r["mode"]=="sync":
+                    assert eager and digest and lora
+                    save(dest,{"request_id":r["request_id"],"adapter_sha256":digest,"lora_id":active,
+                               "elapsed_seconds":time.monotonic()-start})
+                    continue
                 params=[]
                 for row in r["prompts"]:
                     assert len(row["prompt_token_ids"])+r["max_new_tokens"]<=32768
