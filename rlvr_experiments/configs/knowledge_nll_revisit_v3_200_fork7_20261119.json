@@ -1,0 +1,68 @@
+{
+  "name": "knowledge_nll_revisit_v3_200_fork7_20261119",
+  "model_path": "finetuning/model/sft/en_cot_49800/merged/checkpoint-9000",
+  "training_data": "finetuning/rl/final_data/knowledge_enref_v3_200_20261119/train.jsonl",
+  "train_sha256": "13845b0fd1bae7f174c0044b231b0e1dcccf275e1f34258ef91b4025092aab5e",
+  "id_order_sha256": "e4f36253224308b763a31ce570cf2f860baf930c4d43c0ca17c4ca802d565390",
+  "initial_seed": 20261117,
+  "order_seed": 20261117,
+  "sampling_seed": 20261117,
+  "batch_size": 16,
+  "rollouts_per_question": 3,
+  "max_new_tokens": 8192,
+  "max_model_len": 32768,
+  "temperature": 0.6,
+  "top_p": 1,
+  "top_k": -1,
+  "likelihood_temperature": 0.6,
+  "clip": 0.2,
+  "learning_rate": 5e-06,
+  "warmup_updates": 2,
+  "max_grad_norm": 1,
+  "head_chunk": 512,
+  "lora_rank": 16,
+  "lora_alpha": 32,
+  "weight_decay": 0,
+  "kl_coef": 0,
+  "entropy_coef": 0,
+  "nll_temperature": 1,
+  "nll_batch": 16,
+  "check_every_online": 3,
+  "nll_limit": 8,
+  "maximum_concurrent_gpus": 4,
+  "eval_historical_minutes": 74.6,
+  "eval_entrypoint": "benchmark/eval/scripts/evaluate_same_source_dpo_316.py",
+  "eval_output_limit": 32000,
+  "eval_context": 32768,
+  "eval_seed": 42,
+  "eval_temperature": 0.6,
+  "eval_top_p": 0.95,
+  "eval_top_k": 20,
+  "dataset_manifest_sha256": "c6f0fdda54387eb484dc50a97999d6a2c419589b037214616c6a671f0aeabcdb",
+  "verifier_version": "multilingual-final-answer-v3",
+  "choice_verifier_sha256": "35da0a4e5e9a5ef48e1c31a321bab7db9222bb91c9394b9006cdeb71a4bcebe4",
+  "epochs": 1,
+  "s0_dev_run": "20261116T075408Z-bab24f50",
+  "fork": {
+    "parent_run": "knowledge_grpo_intermittent_nll_v3_200_20261119",
+    "checkpoint": "checkpoint-0007",
+    "files_sha256": {
+      "adapter_model.safetensors": "22a21692678a60fe998638facbb1aa9818ce4c0cbd9699f14899c1d08662471e",
+      "recovery.pt": "59d0c278e71d99719c513d7bd33517facf83bd7ad154ffc77762e4143092c311",
+      "event.json": "f571e08c4f1075ee988679f7880e632412257e740a1c72a63e42ce68a96480c7",
+      "state.json": "e127cfafc80c49e237644389cd58994b1f6be6e15aa6d582bb87ca0ec7a9400c",
+      "manifest.json": "e8942d4d318d6111aaaa114ebefa089c989f701f86f5255bb38601a8c6a9a712"
+    },
+    "training_plan_sha256": "1384091b7877110ce12748216774a2bc14d7d6648c05f4234117fdfce5f679eb",
+    "baselines": {
+      "s0": {
+        "predictions": "benchmark/eval/results/same_source_dpo_316_20261116/sft/dev/bo/choices-4/thinking-on/instruction-bo/checkpoint-9000/20261116T075408Z-bab24f50/predictions.jsonl",
+        "sha256": "1e56e2a1bc26ee46951bb917034264847ea102df5934a44f3474e0cbe24d2889"
+      },
+      "previous": {
+        "predictions": "benchmark/eval/results/knowledge_grpo_intermittent_nll_v3_200_20261119/candidate/dev/bo/choices-4/thinking-on/instruction-bo/checkpoint-9000/20261119T115537Z-77bf7e39/predictions.jsonl",
+        "sha256": "28a5cd0237bb1e1e3c9a4f89c39a3a7114cf7f0ff5025d5314518d2e94332fb6"
+      }
+    }
+  }
+}

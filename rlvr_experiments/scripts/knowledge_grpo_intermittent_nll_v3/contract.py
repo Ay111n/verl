@@ -91,7 +91,7 @@ def pilot_ids(data):
     return result
 
 
-def preflight():
+def preflight(config_path=CONFIG, run_dir=RUN):
     import importlib.metadata as md
     from freeze_knowledge_enref_v3_200 import load_inputs, reference, category
     from difficulty8_generation import PROMPT_PROTOCOL, SLOTS, prepare_prompts, sample_seed
@@ -99,7 +99,7 @@ def preflight():
     from rlvr.answer_verifier import ANSWER_EXTRACTION_VERSION, verify_answer
     from scripts.same_source_dpo_316.paired_dpo import save
 
-    cfg = read(CONFIG)
+    cfg = read(config_path)
     d = ROOT / cfg["training_data"]
     m = read(d.parent / "manifest.json")
     assert sha(d.parent / "manifest.json") == cfg["dataset_manifest_sha256"]
@@ -169,7 +169,7 @@ def preflight():
                 for k in m["quotas"] for n in (4,10)}
     assert dict(strata) == expected and counts == {"references":581, "raw_responses":1600}
     assert max(contexts) == m["statistics"]["max_context_with_eos"]
-    save(RUN/"preflight.json", dict(count=counts, max_reference_context_with_eos=max(contexts),
+    save(run_dir/"preflight.json", dict(count=counts, max_reference_context_with_eos=max(contexts),
         eos=tok.eos_token_id, data_sha256=sha(d), id_order_sha256=cfg["id_order_sha256"], fixed_ids=ids,
         base_model=str(model), model_hashes=native["model_hashes"], protected_matches=0,
         dataset_manifest_sha256=cfg["dataset_manifest_sha256"], verifier_version=ANSWER_EXTRACTION_VERSION,

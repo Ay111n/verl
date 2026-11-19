@@ -51,19 +51,19 @@ def forecast(cfg, started):
                 pilot_policy_discarded=True)
 
 
-def supervise():
-    RUN.mkdir(parents=True,exist_ok=True)
-    lock = (RUN/"controller.lock").open("a")
+def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
+    run_dir.mkdir(parents=True,exist_ok=True)
+    lock = (run_dir/"controller.lock").open("a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    assert (RUN/"preflight.json").is_file(), "Complete the dataset/weight preflight first"
-    if (RUN/"pipeline_complete.json").exists():
+    assert (run_dir/"preflight.json").is_file(), "Complete the dataset/weight preflight first"
+    if (run_dir/"pipeline_complete.json").exists():
         return
-    base = read(CONFIG)
+    base = read(config_path)
     procs = []
     workers = {}
     restarts = {}
     def stage(name,**info):
-        save(RUN/"status.json",dict(stage=name,unix=time.time(),pid=os.getpid(),**info))
+        save(run_dir/"status.json",dict(stage=name,unix=time.time(),pid=os.getpid(),**info))
     def launch(args,gpus,log):
         with log.open("a") as f:
             proc = subprocess.Popen([sys.executable,"-u",*map(str,args)],cwd=ROOT,
@@ -71,7 +71,7 @@ def supervise():
                             VLLM_WORKER_MULTIPROC_METHOD="spawn",PYTHONUNBUFFERED="1"),
                    stdout=f,stderr=subprocess.STDOUT,stdin=subprocess.DEVNULL,start_new_session=True)
         procs.append(proc)
-        save(RUN/"owned_processes.json",dict(controller=os.getpid(),pids=[p.pid for p in procs if p.poll() is None]))
+        save(run_dir/"owned_processes.json",dict(controller=os.getpid(),pids=[p.pid for p in procs if p.poll() is None]))
         return proc
     def end(proc):
         if proc.poll() is not None:
@@ -85,9 +85,9 @@ def supervise():
         except ProcessLookupError:
             pass
     def start_worker(i,gpu):
-        directory = RUN/"rpc_workers"/f"worker{i}"
+        directory = run_dir/"rpc_workers"/f"worker{i}"
         proc = launch([PROJECT/"scripts/luffy_math_pilot/worker.py","--model",ROOT/base["model_path"],
-                       "--rpc",directory,"--max-num-seqs","16"],[gpu],RUN/f"worker{i}.log")
+                       "--rpc",directory,"--max-num-seqs","16"],[gpu],run_dir/f"worker{i}.log")
         workers[i]=(proc,directory,gpu)
     def watch_workers():
         for i,(proc,directory,gpu) in list(workers.items()):
@@ -98,7 +98,8 @@ def supervise():
                 start_worker(i,gpu)
     def actor(which):
         # Each new process either creates the initial state or restores the last complete transaction.
-        proc=launch([HERE/"train.py","--stage",which],[cfg["actor_gpu"]],RUN/f"{which}_actor.log")
+        args = [fork_actor,"train"] if fork_actor else [HERE/"train.py","--stage",which]
+        proc=launch(args,[cfg["actor_gpu"]],run_dir/f"{which}_actor.log")
         while proc.poll() is None:
             watch_workers()
             time.sleep(2)
@@ -116,26 +117,29 @@ def supervise():
             p.wait(timeout=120)
         workers.clear()
     try:
-        if (RUN/"launched.json").exists():
-            launch_meta=read(RUN/"launched.json")
+        if (run_dir/"launched.json").exists():
+            launch_meta=read(run_dir/"launched.json")
         else:
             stage("checking_idle_gpus")
             while True:
                 first=set(idle())
                 time.sleep(3)
                 available=sorted(first.intersection(idle()))[:base["maximum_concurrent_gpus"]]
-                if len(available)>=2:
+                if len(available) >= (4 if fork_actor else 2):
                     break
                 time.sleep(30)
             launch_meta=dict(start_unix=time.time(),gpus=available,python=sys.executable)
-            save(RUN/"launched.json",launch_meta)
+            save(run_dir/"launched.json",launch_meta)
         selected=launch_meta["gpus"]
         cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:2],epochs=1)
         assert len(set(selected))==len(selected)<=base["maximum_concurrent_gpus"]
-        if not (RUN/"complete.json").exists():
+        if fork_actor:
+            assert len(selected) == 4 and (run_dir/"fork_contract.json").is_file()
+        if not (run_dir/"complete.json").exists():
             stage("loading_sampling_replicas",gpus=selected)
             assert set(selected)<=set(idle()),"Assigned GPUs now in use; recheck ownership before retry"
-            save(RUN/"pilot_config.json",cfg)
+            if not fork_actor:
+                save(run_dir/"pilot_config.json",cfg)
             for i,gpu in enumerate(cfg["rollout_gpus"]):
                 start_worker(i,gpu)
             before=time.monotonic()
@@ -145,43 +149,44 @@ def supervise():
                 if time.monotonic()-before>1200:
                     raise TimeoutError("Sampling model load")
                 time.sleep(2)
-            if not (RUN/"pilot/complete.json").exists():
-                stage("pilot",gpus=selected)
-                actor("pilot")
-            if not (RUN/"forecast.json").exists():
-                estimate=forecast(cfg,launch_meta["start_unix"])
-                save(RUN/"forecast.json",estimate)
-            estimate=read(RUN/"forecast.json")
-            stage("forecast_ready",gpus=selected,epochs=estimate["epochs"])
-            assert estimate["epochs"] == base["epochs"] == 1
-            save(RUN/"effective_training_config.json",cfg)
-            if not (RUN/"training_started.json").exists():
-                save(RUN/"training_started.json",dict(unix=time.time()))
+            if not fork_actor:
+                if not (run_dir/"pilot/complete.json").exists():
+                    stage("pilot",gpus=selected)
+                    actor("pilot")
+                if not (run_dir/"forecast.json").exists():
+                    estimate=forecast(cfg,launch_meta["start_unix"])
+                    save(run_dir/"forecast.json",estimate)
+                estimate=read(run_dir/"forecast.json")
+                stage("forecast_ready",gpus=selected,epochs=estimate["epochs"])
+                assert estimate["epochs"] == base["epochs"] == 1
+            save(run_dir/"effective_training_config.json",cfg)
+            if not (run_dir/"training_started.json").exists():
+                save(run_dir/"training_started.json",dict(unix=time.time()))
             stage("training",epochs=cfg["epochs"],gpus=selected)
             actor("formal")
             stage("releasing_training_gpus")
             shutdown_workers()
-        final=read(RUN/"complete.json")
+        final=read(run_dir/"complete.json")
         assert final["question_visits"]==final["epochs"]*200 and final["online_responses"]==final["epochs"]*600
         assert not final["due"] and final["nll"]<=8 and sha(Path(final["adapter"])/"adapter_model.safetensors")==final["adapter_sha256"]
         stage("evaluating_666DEV",gpus=cfg["eval_gpus"])
-        if not (RUN/"evaluation_started.json").exists():
-            save(RUN/"evaluation_started.json",dict(unix=time.time()))
+        if not (run_dir/"evaluation_started.json").exists():
+            save(run_dir/"evaluation_started.json",dict(unix=time.time()))
         assessment=ROOT/"benchmark/eval/analysis"/base["name"]/"candidate_result.json"
         if not assessment.exists():
             while not set(cfg["eval_gpus"])<=set(idle()):
                 time.sleep(5)
             proc=launch([ROOT/base["eval_entrypoint"],"--model",ROOT/base["model_path"],"--arm","candidate",
-                         "--adapter",final["adapter"],"--run-name",base["name"]],cfg["eval_gpus"],RUN/"eval.log")
+                         "--adapter",final["adapter"],"--run-name",base["name"]],cfg["eval_gpus"],run_dir/"eval.log")
             if proc.wait()!=0:
                 raise RuntimeError("Native evaluation failed")
         assert assessment.is_file()
         end_time=time.time()
-        save(RUN/"pipeline_complete.json",dict(start_unix=launch_meta["start_unix"],end_unix=end_time,
+        save(run_dir/"pipeline_complete.json",dict(start_unix=launch_meta["start_unix"],end_unix=end_time,
                  elapsed_seconds=end_time-launch_meta["start_unix"],assessment=str(assessment),questions=666))
         stage("evaluated")
     except BaseException:
-        save(RUN/f"failure-{os.getpid()}.json",dict(error=traceback.format_exc(),unix=time.time()))
+        save(run_dir/f"failure-{os.getpid()}.json",dict(error=traceback.format_exc(),unix=time.time()))
         raise
     finally:
         for proc in reversed(procs):

@@ -1,1 +1,3 @@
 该入口使用冻结的 `knowledge_enref_v3_200_20261119` 和 `multilingual-final-answer-v3`。在 L20 的 `inference` 环境先执行 `contract.py`，再执行 `run.py`。一个临时的 16 题试跑验证奖励、NLL 掩码、最长参考和恢复状态，正式模型从原始 S0 训练一遍。每次完成优化后原子发布恢复点。最终 adapter 接受藏文 Thinking ON 的 666DEV，两个独立副本均按原题序使用种子，输出上限 32,000。
+
+The checkpoint-0007 branch uses `python revisit.py preflight`, then `python revisit.py run`. Each 16-question NLL batch receives exactly one additional on-policy Tibetan GRPO batch using the original prompt tokens, three fresh seeds per question and no reference text. Revisit transactions retain the regular cursor, pool and NLL schedule. Ordinary prompts keep their parent seeds. The four-GPU training job evaluates its final adapter with the same two-replica 666DEV protocol.
