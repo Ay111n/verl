@@ -4,10 +4,20 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import re
 import unicodedata
+from pathlib import Path
+import os
+import sys
 from typing import Any
 from rlvr.verifier import parse_protocol
 
-VERIFIER_VERSION = "rlvr-answer-v2"
+# The benchmark owns one implementation for training and held-out evaluation.
+benchmark_root = Path(os.environ.get("RLVR_BENCHMARK_ROOT", Path(__file__).resolve().parents[3] / "benchmark"))
+sys.path.insert(0, str(benchmark_root / "eval/scripts"))
+from mcqa_answer_extraction_multilingual import (
+    ANSWER_EXTRACTION_VERSION, choice_correct, decide_final, parse_choice_completion,
+)
+
+VERIFIER_VERSION = "rlvr-answer-v2"  # numeric protocol and historical dataset identifier
 MAX_FINAL_CHARS = 100_000
 _ATOM = r"[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _VALUE = rf"{_ATOM}(?:\s*/\s*{_ATOM})?"
@@ -23,11 +33,6 @@ CUE = re.compile(
     re.IGNORECASE)
 OPTION_CUE = re.compile(r"\b(?:option|choice)\b\s*(?:is\b|=|:|：)?", re.IGNORECASE)
 SENTENCE_END = re.compile(r"\n|[。།༎!?;；]|\.(?=\s|$)")
-ANY_LABEL = re.compile(r"(?<![A-Za-z0-9])([A-Z])(?![A-Za-z0-9])")
-ALTERNATIVE = re.compile(
-    r"^\s*(?:[,/]|or\b|and\b|and/or\b|ཡང་ན|དང|或者|或)\s*"
-    r"[\s་:：(\[]*([A-J])", re.IGNORECASE)
-
 def surface(text: str) -> str:
     value = unicodedata.normalize("NFKC", str(text))
     value = value.replace("\u2212", "-").replace("\u2044", "/")
@@ -112,52 +117,18 @@ def _regions(text: str) -> list[str]:
         result.append(tail[:stop.start()] if stop else tail)
     return [r for r in result if r.strip()]
 
-def _choice_region(text: str, explicit: bool) -> tuple[list[str], str | None]:
-    text = surface(text)
-    matches = list(ANY_LABEL.finditer(text))
-    if not matches:
-        lower = re.fullmatch(r"[\s*\x60$([{]*([a-j])[\s*\x60$)\]}.。།༎:：]*", text)
-        return ([lower.group(1).upper()], None) if lower else ([], None)
-    if explicit:
-        first = matches[0]
-        other = ALTERNATIVE.match(text[first.end():])
-        if other and other.group(1).upper() != first.group(1):
-            return [first.group(1), other.group(1).upper()], "ambiguous"
-        return [first.group(1)], None
-    return [m.group(1) for m in matches], None
+def _choice_width(labels):
+    return 4 if set(labels) <= set("ABCD") else 10
+
 
 def extract_choice(final: str, labels: tuple[str, ...]) -> dict[str, Any]:
-    text = surface(final)
-    try:
-        boxes = _boxes(text)
-    except ValueError as exc:
-        return {"parse_status": "ambiguous", "reason": str(exc)}
-    regions = _regions(text)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    terminal = []
-    if lines and re.match(r"^[\s*\x60$([{]*[A-Ja-j](?=[\s*\x60$)\]}]*(?:[.:：་།༎]|$))", lines[-1]):
-        terminal = [lines[-1]]
-    values, reasons = [], []
-    if boxes or regions or terminal:
-        for part in boxes + regions + terminal:
-            found, reason = _choice_region(part, True)
-            values.extend(found)
-            if reason:
-                reasons.append(reason)
-    else:
-        values, reason = _choice_region(text, False)
-        if reason:
-            reasons.append(reason)
-    unique = set(values)
-    if reasons or len(unique) > 1:
-        return {"parse_status": "ambiguous", "reason": "conflicting_final_labels"}
-    if not unique:
-        return {"parse_status": "no_answer", "reason": "no_final_label"}
-    value = next(iter(unique))
-    if value not in labels:
-        return {"parse_status": "invalid_option", "extracted_answer_raw": value,
-                "reason": "label_outside_option_set"}
-    return {"parse_status": "ok", "extracted_answer_raw": value, "normalized_answer": value}
+    decision = decide_final(final, _choice_width(labels))
+    value = decision.letter
+    if value is not None and value not in labels:
+        return {"parse_status": "invalid_option", "reason": "label_outside_option_set"}
+    return {"parse_status": decision.status, "extracted_answer_raw": value,
+            "normalized_answer": value, "reason": None if value else decision.method}
+
 
 def _numeric_values(text: str, policy: dict[str, Any]) -> list[tuple[str, Fraction]]:
     text = _latex(surface(text))
@@ -237,18 +208,32 @@ def verify_answer(
     if output_tokens is not None and (output_tokens < 0 or (max_new_tokens is not None and output_tokens > max_new_tokens)):
         raise ValueError("Output token count violates generation contract")
     termination = ("runtime_error" if backend_error or finish_reason in ("abort", "aborted", "error", "cancelled")
-                   else "completed" if finish_reason == "stop"
+                   else "completed" if finish_reason in ("stop", "eos", "completed", "end_turn")
                    else "truncated" if finish_reason == "length" else "unknown")
     parsed = parse_protocol(prompt, completion)
     final = parsed["final_region"]
-    if final is None:
+    shared = None
+    if domain == "knowledge":
+        options = {label: [opt[label] for opt in (sample.get("options_bo") or {}, sample.get("options_en") or {})
+                           if isinstance(opt.get(label), str)] for label in labels}
+        shared = parse_choice_completion(completion, parsed["prefix_open"], _choice_width(labels), options)
+        value = shared["answer_ability"]
+        status, method = shared["choice_parse_status"], shared["answer_ability_extraction_method"]
+        if value is not None and value not in labels:
+            value, status, method = None, "invalid_option", "label_outside_option_set"
+        final = None if status == "no_final" else shared["response"]
+        parsed.update(final_region=final, think_body=shared["thinking"])
+        answer = {"parse_status": status, "extracted_answer_raw": value, "normalized_answer": value,
+                  "reason": None if value else method, "choice_method": method,
+                  "answer_evidence": shared["answer_evidence"], "answer_extraction_version": ANSWER_EXTRACTION_VERSION}
+    elif final is None:
         answer = {"parse_status": "no_final", "reason": parsed["parse_note"]}
     elif not final.strip():
         answer = {"parse_status": "no_answer", "reason": "empty_final"}
     elif len(final) > MAX_FINAL_CHARS:
         answer = {"parse_status": "unsupported", "reason": "final_region_too_long"}
     else:
-        answer = extract_choice(final, labels) if domain == "knowledge" else extract_numeric(final, policy)
+        answer = extract_numeric(final, policy)
     value = answer.get("normalized_answer")
     correct = int(answer["parse_status"] == "ok" and
                   (value == gold if domain == "knowledge" else rational(value) == gold))
@@ -256,8 +241,10 @@ def verify_answer(
     depth = int(parsed["prefix_open"])
     for marker in re.findall(r"<think>|</think>", completion):
         depth = depth + 1 if marker == "<think>" else max(0, depth - 1)
+    if shared is not None:
+        correct = choice_correct(value, gold, finish_reason) if execution_valid else None
     result = {
-        **parsed, **answer, "verifier_version": VERIFIER_VERSION,
+        **parsed, **answer, "verifier_version": ANSWER_EXTRACTION_VERSION if shared is not None else VERIFIER_VERSION,
         "protocol_version": "english_think_tibetan_final_v1",
         "correctness": correct if execution_valid else None,
         "answer_correct": bool(correct) if execution_valid else None,
@@ -267,8 +254,8 @@ def verify_answer(
         "truncated": termination == "truncated", "finish_reason": finish_reason,
         "output_tokens": output_tokens, "max_new_tokens": max_new_tokens,
         "pair_eligible": termination == "completed" and answer["parse_status"] == "ok",
-        "thinking_unclosed": depth > 0,
-        "thinking_closed": "</think>" in completion and depth == 0,
+        "thinking_unclosed": (shared["thinking_started"] and not shared["thinking_closed"]) if shared is not None else depth > 0,
+        "thinking_closed": shared["thinking_closed"] if shared is not None else "</think>" in completion and depth == 0,
         "no_reliable_final": final is None, "final_present": final is not None,
         "empty_final": final is not None and not bool(final.strip()),
         "no_answer": None if final is None else not bool(final.strip()),
