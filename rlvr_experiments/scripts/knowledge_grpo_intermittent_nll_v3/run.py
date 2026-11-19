@@ -96,10 +96,12 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
                 if restarts[i]>3:
                     raise RuntimeError(f"Sampling worker {i} repeatedly exited ({proc.returncode})")
                 start_worker(i,gpu)
-    def actor(which):
+    def start_actor(which):
         # Each new process either creates the initial state or restores the last complete transaction.
         args = [fork_actor,"train"] if fork_actor else [HERE/"train.py","--stage",which]
-        proc=launch(args,[cfg["actor_gpu"]],run_dir/f"{which}_actor.log")
+        return launch(args,[cfg["actor_gpu"]],run_dir/f"{which}_actor.log")
+    def actor(which, proc=None):
+        proc = start_actor(which) if proc is None else proc
         while proc.poll() is None:
             watch_workers()
             time.sleep(2)
@@ -119,6 +121,23 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
     try:
         if (run_dir/"launched.json").exists():
             launch_meta=read(run_dir/"launched.json")
+            if fork_actor and not (run_dir/"complete.json").exists():
+                prior = launch_meta["gpus"]
+                while True:
+                    available = set(idle())
+                    time.sleep(3)
+                    available.intersection_update(idle())
+                    if len(available)>=4:
+                        break
+                    time.sleep(15)
+                lanes = [g for g in prior[1:] if g in available]
+                actor_gpu = prior[0] if prior[0] in available else min(available-set(lanes))
+                lanes += sorted(available-set(lanes)-{actor_gpu})[:3-len(lanes)]
+                devices = [actor_gpu,*lanes]
+                if devices!=prior:
+                    save(run_dir/f"gpu-assignment-{time.time_ns()}.json",dict(previous=prior,current=devices,unix=time.time()))
+                    launch_meta = dict(launch_meta,gpus=devices)
+                    save(run_dir/"launched.json",launch_meta)
         else:
             stage("checking_idle_gpus")
             while True:
@@ -138,7 +157,14 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
         if not (run_dir/"complete.json").exists():
             stage("loading_sampling_replicas",gpus=selected)
             assert set(selected)<=set(idle()),"Assigned GPUs now in use; recheck ownership before retry"
-            if not fork_actor:
+            formal_actor = None
+            if fork_actor:
+                # The actor restores concurrently so an assigned GPU is not left idle during sampler boot.
+                save(run_dir/"effective_training_config.json",cfg)
+                if not (run_dir/"training_started.json").exists():
+                    save(run_dir/"training_started.json",dict(unix=time.time()))
+                formal_actor = start_actor("formal")
+            else:
                 save(run_dir/"pilot_config.json",cfg)
             for i,gpu in enumerate(cfg["rollout_gpus"]):
                 start_worker(i,gpu)
@@ -163,7 +189,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
             if not (run_dir/"training_started.json").exists():
                 save(run_dir/"training_started.json",dict(unix=time.time()))
             stage("training",epochs=cfg["epochs"],gpus=selected)
-            actor("formal")
+            actor("formal",formal_actor)
             stage("releasing_training_gpus")
             shutdown_workers()
         final=read(run_dir/"complete.json")

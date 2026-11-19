@@ -133,7 +133,12 @@ def train():
     assert params and all(p.dtype == torch.float32 for p in params)
     assert all("lora_" in n for n,p in model.named_parameters() if p.requires_grad)
     opt = torch.optim.AdamW(params, lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"], betas=(.9,.999),eps=1e-8)
-    state, digest = restore(last, model, opt, cfg if existing else original)
+    restore_cfg = original
+    if existing:
+        restore_cfg = read(last / "training_config.json")
+        runtime_keys = {"actor_gpu","rollout_gpus","eval_gpus"}
+        assert {k:v for k,v in restore_cfg.items() if k not in runtime_keys} == {k:v for k,v in cfg.items() if k not in runtime_keys}
+    state, digest = restore(last, model, opt, restore_cfg)
     if existing:
         for p in existing:
             target = RUN / "steps" / (p.name + ".json")
