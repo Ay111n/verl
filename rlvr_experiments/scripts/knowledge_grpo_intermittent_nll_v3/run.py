@@ -63,7 +63,9 @@ def forecast(cfg, started):
                 pilot_policy_discarded=True)
 
 
-def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
+def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=None):
+    assert not (fork_actor and online_actor)
+    custom_actor = fork_actor or online_actor
     run_dir.mkdir(parents=True,exist_ok=True)
     lock = (run_dir/"controller.lock").open("a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -110,7 +112,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
                 start_worker(i,gpu)
     def start_actor(which):
         # Each new process either creates the initial state or restores the last complete transaction.
-        args = [fork_actor,"train"] if fork_actor else [HERE/"train.py","--stage",which]
+        args = [custom_actor,"train"] if custom_actor else [HERE/"train.py","--stage",which]
         return launch(args,[cfg["actor_gpu"]],run_dir/f"{which}_actor.log")
     def actor(which, proc=None):
         proc = start_actor(which) if proc is None else proc
@@ -133,7 +135,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
     try:
         if (run_dir/"launched.json").exists():
             launch_meta=read(run_dir/"launched.json")
-            if fork_actor and not (run_dir/"complete.json").exists():
+            if custom_actor and not (run_dir/"complete.json").exists():
                 prior = launch_meta["gpus"]
                 while True:
                     available = set(idle())
@@ -156,21 +158,23 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
                 first=set(idle())
                 time.sleep(3)
                 available=sorted(first.intersection(idle()))[:base["maximum_concurrent_gpus"]]
-                if len(available) >= (4 if fork_actor else 2):
+                if len(available) >= (4 if custom_actor else 2):
                     break
                 time.sleep(30)
             launch_meta=dict(start_unix=time.time(),gpus=available,python=sys.executable)
             save(run_dir/"launched.json",launch_meta)
         selected=launch_meta["gpus"]
-        cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:2],epochs=1)
+        cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:base.get("eval_replicas", 2)],epochs=1)
         assert len(set(selected))==len(selected)<=base["maximum_concurrent_gpus"]
+        if custom_actor:
+            assert len(selected) == 4
         if fork_actor:
-            assert len(selected) == 4 and (run_dir/"fork_contract.json").is_file()
+            assert (run_dir/"fork_contract.json").is_file()
         if not (run_dir/"complete.json").exists():
             stage("loading_sampling_replicas",gpus=selected)
             assert set(selected)<=set(idle()),"Assigned GPUs now in use; recheck ownership before retry"
             formal_actor = None
-            if fork_actor:
+            if custom_actor:
                 # The actor restores concurrently so an assigned GPU is not left idle during sampler boot.
                 save(run_dir/"effective_training_config.json",cfg)
                 if not (run_dir/"training_started.json").exists():
@@ -187,7 +191,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
                 if time.monotonic()-before>1200:
                     raise TimeoutError("Sampling model load")
                 time.sleep(2)
-            if not fork_actor:
+            if not custom_actor:
                 if not (run_dir/"pilot/complete.json").exists():
                     stage("pilot",gpus=selected)
                     actor("pilot")
@@ -205,7 +209,9 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
             stage("releasing_training_gpus")
             shutdown_workers()
         final=read(run_dir/"complete.json")
-        assert final["question_visits"]==final["epochs"]*200 and final["online_responses"]==final["epochs"]*600
+        expected_questions = final["epochs"] * base.get("training_questions", 200)
+        assert final["question_visits"] == expected_questions
+        assert final["online_responses"] == expected_questions * base["rollouts_per_question"]
         assert not final["due"] and final["nll"]<=8 and sha(Path(final["adapter"])/"adapter_model.safetensors")==final["adapter_sha256"]
         stage("evaluating_666DEV",gpus=cfg["eval_gpus"])
         if not (run_dir/"evaluation_started.json").exists():
@@ -213,7 +219,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
         assessment=ROOT/"benchmark/eval/analysis"/base["name"]/"candidate_result.json"
         if not assessment.exists():
             eval_gpus = cfg["eval_gpus"]
-            if fork_actor:
+            if custom_actor:
                 eval_gpus = available_eval_gpus(eval_gpus)
                 save(run_dir/"eval_gpu_assignment.json", dict(
                     preferred=cfg["eval_gpus"], gpus=eval_gpus, launch_unix=time.time()))
@@ -222,7 +228,9 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
                 while not set(eval_gpus)<=set(idle()):
                     time.sleep(5)
             proc=launch([ROOT/base["eval_entrypoint"],"--model",ROOT/base["model_path"],"--arm","candidate",
-                         "--adapter",final["adapter"],"--run-name",base["name"]],eval_gpus,run_dir/"eval.log")
+                         "--adapter",final["adapter"],"--run-name",base["name"],
+                         *(["--replicas", str(base["eval_replicas"])] if "eval_replicas" in base else [])],
+                        eval_gpus,run_dir/"eval.log")
             if proc.wait()!=0:
                 raise RuntimeError("Native evaluation failed")
         assert assessment.is_file()

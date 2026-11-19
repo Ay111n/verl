@@ -51,7 +51,7 @@ def generate(batch, data, cfg, workers, tag, adapter, digest, cursor, stage):
     synced = sync(workers, tag, adapter, digest)
     prompts = []
     for qid in batch:
-        for rep in range(3):
+        for rep in range(cfg.get("rollouts_per_question", 3)):
             seed_text = f'{cfg["sampling_seed"]}|{stage}|{cursor}|{qid}|{rep}'
             seed = int.from_bytes(hashlib.sha256(seed_text.encode()).digest()[:4], "big") % (2**31-1)
             prompts.append(dict(id=qid, rollout_index=rep, seed=seed, prompt_token_ids=data[qid]["prompt_token_ids"]))

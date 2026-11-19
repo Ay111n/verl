@@ -28,12 +28,13 @@ def finish_update(opt, params, cfg, policy):
 
 def online(model, opt, params, cfg, state, ids, preds, data, tag, first, times):
     started = time.monotonic()
+    size = cfg.get("rollouts_per_question", 3)
     groups, items = [], []
     correct = Counter()
     for i, qid in enumerate(ids):
         row = data[qid]
-        samples = preds[3*i:3*i+3]
-        assert len(samples) == 3 and all((p["id"],p["rollout_index"]) == (qid,j) for j,p in enumerate(samples))
+        samples = preds[size*i:size*(i+1)]
+        assert len(samples) == size and all((p["id"],p["rollout_index"]) == (qid,j) for j,p in enumerate(samples))
         rewards = []
         scored = []
         for p in samples:
@@ -44,7 +45,7 @@ def online(model, opt, params, cfg, state, ids, preds, data, tag, first, times):
             scored.append(dict(rep=p["rollout_index"], seed=p["seed"], selected=verdict["extracted_answer"],
                                gold=row["canonical_answer"], method=verdict["choice_method"],
                                status=verdict["parse_status"], finish_reason=p["finish_reason"]))
-        advs = advantages(rewards)
+        advs = advantages(rewards, size)
         groups.append(dict(id=qid, rewards=rewards, advantages=advs, judgments=scored, verifier=cfg["verifier_version"]))
         correct[sum(rewards)] += 1
         items.extend(zip(samples, advs, strict=True))
@@ -64,19 +65,19 @@ def online(model, opt, params, cfg, state, ids, preds, data, tag, first, times):
                 raise ValueError(f"Sampling policy and actor raw log probabilities differ: {mae} ({tag})")
             if advantage:
                 # One gradient accumulation at the exact frozen rollout policy. No optimizer
-                # update occurs until all three-response groups have contributed.
+                # update occurs until all response groups have contributed.
                 old_lp = lp.detach()
                 ratio = (lp.detach() - old_lp).exp()
                 clipped_tokens += int(((ratio - 1).abs() > cfg["clip"]).sum())
                 checked_tokens += lp.numel()
-                term = online_loss(lp, old_lp, advantage, cfg["clip"]) / (3*len(ids))
+                term = online_loss(lp, old_lp, advantage, cfg["clip"]) / (size*len(ids))
                 term.backward()
                 loss += float(term.detach())
         del values, raw, lp
-    active = bool(correct[1] + correct[2])
+    active = any(correct[k] for k in range(1, size))
     stats = finish_update(opt, params, cfg, state["policy"]) if active else dict(grad_norm=0.,grad_clipped=False)
     return dict(kind="online", groups=groups, question_count=len(ids), online_responses=len(preds),
-                correct_responses=sum(k*v for k,v in correct.items()), group_histogram=[correct[k] for k in range(4)],
+                correct_responses=sum(k*v for k,v in correct.items()), group_histogram=[correct[k] for k in range(size+1)],
                 output_tokens=sum(len(p["response_token_ids"]) for p in preds),
                 prompt_tokens=sum(len(p["prompt_token_ids"]) for p in preds),
                 truncated=sum(p["finish_reason"] == "length" for p in preds), optimizer_updated=active,

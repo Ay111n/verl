@@ -24,10 +24,10 @@ def text_sha(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def advantages(rewards):
-    if len(rewards) != 3 or any(r not in (0, 1) for r in rewards):
-        raise ValueError("Expected three binary student rewards")
-    mean = sum(rewards) / 3
+def advantages(rewards, group_size=3):
+    if group_size < 2 or len(rewards) != group_size or any(r not in (0, 1) for r in rewards):
+        raise ValueError(f"Expected {group_size} binary student rewards")
+    mean = sum(rewards) / group_size
     return [r - mean for r in rewards]
 
 
