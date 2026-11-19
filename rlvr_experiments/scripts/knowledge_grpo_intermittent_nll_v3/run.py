@@ -22,6 +22,18 @@ def idle():
             if used < 128 and util < 5]
 
 
+def available_eval_gpus(preferred):
+    while True:
+        available = set(idle())
+        time.sleep(3)
+        available.intersection_update(idle())
+        ordered = list(preferred) + sorted(available.difference(preferred))
+        chosen = [gpu for gpu in ordered if gpu in available][:len(preferred)]
+        if len(chosen) == len(preferred):
+            return chosen
+        time.sleep(5)
+
+
 def forecast(cfg, started):
     run = RUN/"pilot"
     online = read(run/"steps/checkpoint-0001.json")
@@ -200,10 +212,17 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None):
             save(run_dir/"evaluation_started.json",dict(unix=time.time()))
         assessment=ROOT/"benchmark/eval/analysis"/base["name"]/"candidate_result.json"
         if not assessment.exists():
-            while not set(cfg["eval_gpus"])<=set(idle()):
-                time.sleep(5)
+            eval_gpus = cfg["eval_gpus"]
+            if fork_actor:
+                eval_gpus = available_eval_gpus(eval_gpus)
+                save(run_dir/"eval_gpu_assignment.json", dict(
+                    preferred=cfg["eval_gpus"], gpus=eval_gpus, launch_unix=time.time()))
+                stage("evaluating_666DEV", gpus=eval_gpus)
+            else:
+                while not set(eval_gpus)<=set(idle()):
+                    time.sleep(5)
             proc=launch([ROOT/base["eval_entrypoint"],"--model",ROOT/base["model_path"],"--arm","candidate",
-                         "--adapter",final["adapter"],"--run-name",base["name"]],cfg["eval_gpus"],run_dir/"eval.log")
+                         "--adapter",final["adapter"],"--run-name",base["name"]],eval_gpus,run_dir/"eval.log")
             if proc.wait()!=0:
                 raise RuntimeError("Native evaluation failed")
         assert assessment.is_file()
