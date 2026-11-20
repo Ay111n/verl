@@ -17,8 +17,9 @@ def sampling_cards(cfg):
         time.sleep(3)
         second = inventory()
         cards = [g for g in cfg["sampling_gpu_pool"] if all(m[g][1]<128 and m[g][3]<5 for m in (first,second))]
-        if len(cards)>=3:
-            return cards[:3]
+        count = cfg.get("sampling_replicas", 3)
+        if len(cards)>=count:
+            return cards[:count]
         time.sleep(10)
 
 

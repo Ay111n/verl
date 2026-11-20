@@ -181,7 +181,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
             assert selected[0] in base["shared_actor_gpus"] and set(selected[1:])<=set(base["sampling_gpu_pool"])
         assert len(set(selected))==len(selected)<=base["maximum_concurrent_gpus"]
         if custom_actor:
-            assert len(selected) == 4
+            assert len(selected) == 1 + base.get("sampling_replicas", 3)
         if fork_actor:
             assert (run_dir/"fork_contract.json").is_file()
         if not (run_dir/"complete.json").exists():
