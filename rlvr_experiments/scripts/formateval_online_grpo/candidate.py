@@ -21,7 +21,9 @@ from run import supervise
 from scripts.luffy_math_pilot.common import adapter_hash, load_model, read_rows, save, sha
 from rlvr.answer_verifier import ANSWER_EXTRACTION_VERSION
 
-NAME = "formateval_grpo_v3_928_20261120"
+NAME = os.environ.get("FORMATEVAL_GRPO_NAME", "formateval_grpo_v3_928_20261120")
+if not NAME or Path(NAME).name != NAME:
+    raise ValueError("Invalid experiment name")
 CONFIG = PROJECT / "configs" / (NAME + ".json")
 RUN = PROJECT / "runs" / NAME
 OUT = ROOT / "finetuning/model/rl" / NAME
@@ -39,10 +41,19 @@ def preflight():
     assert ANSWER_EXTRACTION_VERSION == cfg["verifier_version"]
     assert sha(ROOT / "benchmark/eval/scripts/mcqa_answer_extraction_multilingual.py") == cfg["choice_verifier_sha256"]
     assert PROMPT_PROTOCOL == cfg["prompt_protocol"]
-    assert (cfg["training_questions"], cfg["rollouts_per_question"], cfg["batch_size"], cfg["epochs"]) == (928, 4, 16, 1)
+    assert cfg["objective"] == "online outcome-only GRPO" and not cfg.get("option_ranking")
+    assert cfg["name"] == NAME and (cfg["rollouts_per_question"], cfg["batch_size"], cfg["epochs"]) == (4, 16, 1)
+    source_manifest = manifest
+    if "parent" in manifest:
+        parent_data = ds.parent.parent / manifest["parent"]
+        source_manifest = read(parent_data / "manifest.json")
+        assert sha(parent_data / "train.jsonl") == manifest["parent_train_sha256"] == source_manifest["train_sha256"]
+        assert sha(ds.parent / "ordered_ids.txt") == cfg["id_order_sha256"]
+        assert sha(ds.parent / manifest["audit_file"]) == manifest["audit_sha256"]
+        assert manifest["verification"]["protected_matches"] == 0
     assert cfg["kl_coef"] == cfg["entropy_coef"] == 0
-    eligible_inputs = manifest["sources"]
-    for item in [*eligible_inputs.values(), *manifest["protected_inputs"].values()]:
+    eligible_inputs = source_manifest["sources"]
+    for item in [*eligible_inputs.values(), *source_manifest["protected_inputs"].values()]:
         assert sha(ROOT / (item.get("local_path") or item["file"])) == item["sha256"]
     native = read(ROOT / "finetuning/rl/processed_data/difficulty8_paired_full_20261118/protocol.json")
     base = ROOT / cfg["model_path"]
@@ -72,7 +83,7 @@ def preflight():
         assert prompt["prompt"].endswith("<|im_start|>assistant\n"), "S0 native Thinking ON prefix differs"
         assert len(prompt["token_ids"]) + cfg["max_new_tokens"] <= cfg["max_model_len"]
     assert text_sha("\n".join(prepared) + "\n") == cfg["id_order_sha256"] == manifest["id_order_sha256"]
-    assert len(prepared) == cfg["training_questions"] and len(manifest["subject_strata"]) == 111
+    assert len(prepared) == cfg["training_questions"] and len({(q["source"], q["subject"]) for q in prepared.values()}) == 111
     assert Counter(q["source"] for q in prepared.values()) == manifest["source_counts"]
     RUN.mkdir(parents=True, exist_ok=True)
     save(RUN / "training_prompts.json", prepared)
@@ -114,7 +125,8 @@ def train():
     assert text_sha("\n".join(ids) + "\n") == cfg["id_order_sha256"]
     size = cfg["batch_size"]
     batches = [ids[i:i + size] for i in range(0, len(ids), size)]
-    assert list(map(len, batches)) == [16]*58
+    assert len(ids) == cfg["training_questions"] and all(len(b) == size for b in batches)
+    expected_responses = len(ids) * cfg["rollouts_per_question"]
     save(RUN / "training_plan.json", dict(ordered_batches=batches, train_sha256=cfg["train_sha256"]))
     OUT.mkdir(parents=True, exist_ok=True)
     before = time.monotonic()
@@ -161,11 +173,11 @@ def train():
     sync_time = sync(workers, f'formal-final-v{state["policy"]}-{digest[:12]}', last, digest)
     events = [read(RUN/"steps"/f"checkpoint-{i:04d}.json") for i in range(1, len(batches)+1)]
     assert [g["id"] for e in events for g in e["groups"]] == ids
-    assert sum(e["online_responses"] for e in events) == 3712
+    assert sum(e["online_responses"] for e in events) == expected_responses
     assert all(conf["rewards"] == [int(y["selected"]==y["gold"] and y["finish_reason"]=="stop")
                                     for y in conf["judgments"]] for e in events for conf in e["groups"])
     final = dict(state, epochs=1, adapter=str(last), adapter_sha256=digest, model_path=str(base),
-                 train_sha256=cfg["train_sha256"], question_visits=len(ids), online_responses=3712,
+                 train_sha256=cfg["train_sha256"], question_visits=len(ids), online_responses=expected_responses,
                  correct_responses=sum(e["correct_responses"] for e in events), truncated=sum(e["truncated"] for e in events),
                  group_histogram=[sum(e["group_histogram"][i] for e in events) for i in range(5)],
                  output_tokens=sum(e["output_tokens"] for e in events), prompt_tokens=sum(e["prompt_tokens"] for e in events),
