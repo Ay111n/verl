@@ -19,21 +19,25 @@ def seed_for(cfg, qid, rep):
     return int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], "big") % (2**31-1)
 
 
-def slot(qid, rep):
+def slot(qid, rep, cfg):
     assert Path(qid).name == qid
-    return RUN / "teacher_responses" / qid / f"{rep}.json.gz"
+    directory = RUN
+    if rep < cfg.get("teacher_reused_slots",0):
+        directory = RUN.parent/cfg["teacher_source"]
+    return directory/"teacher_responses"/qid/f"{rep}.json.gz"
 
 
 def validate(row, view, rep, cfg, audit):
     assert row["id"] == view["id"] and row["rep"] == rep
     assert row["seed"] == seed_for(cfg, view["id"], rep)
-    assert row["config_sha256"] == audit["config_sha256"] and row["prompt_sha256"] == view["prompt_sha256"]
+    expected = cfg["teacher_source_sha256"] if rep < cfg.get("teacher_reused_slots",0) else audit["config_sha256"]
+    assert row["config_sha256"] == expected and row["prompt_sha256"] == view["prompt_sha256"]
     assert row["output_tokens"] == len(row["response_token_ids"])
     assert row["judgment"] == judge(view, row["completion"], row["finish_reason"], row["output_tokens"], cfg)
 
 
 def load_slot(view, rep, cfg, audit):
-    with gzip.open(slot(view["id"], rep), "rt", encoding="utf-8") as f:
+    with gzip.open(slot(view["id"], rep, cfg), "rt", encoding="utf-8") as f:
         row = json.load(f)
     validate(row, view, rep, cfg, audit)
     return row
@@ -50,9 +54,11 @@ async def worker(rank, world):
     for uid in list(data)[rank::world]:
         for rep in range(cfg["teacher_rollouts"]):
             view = data[uid]["en"]
-            if slot(uid, rep).exists():
+            if slot(uid, rep, cfg).exists():
                 load_slot(view, rep, cfg, audit)
             else:
+                if rep < cfg.get("teacher_reused_slots",0):
+                    raise FileNotFoundError(slot(uid,rep,cfg))
                 jobs.append((view, rep))
     if not jobs:
         return
@@ -82,7 +88,7 @@ async def worker(rank, world):
             row = dict(id=uid, rep=rep, seed=seed, prompt_sha256=view["prompt_sha256"], config_sha256=audit["config_sha256"],
                 completion=answer.text, response_token_ids=tokens, output_tokens=len(tokens), finish_reason=answer.finish_reason,
                 stop_reason=answer.stop_reason, judgment=judge(view, answer.text, answer.finish_reason, len(tokens), cfg))
-            dest = slot(uid, rep)
+            dest = slot(uid, rep, cfg)
             dest.parent.mkdir(parents=True, exist_ok=True)
             tmp = dest.with_suffix(".tmp")
             with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=2) as f:
@@ -98,17 +104,22 @@ async def worker(rank, world):
 
 
 def aggregate(cfg, audit, data):
-    groups, total_tokens, truncated = {}, 0, 0
+    groups, votes, total_tokens, truncated = {}, {}, 0, 0
     for uid, pair in data.items():
         rewards = []
+        votes[uid] = []
+        seeds = set()
         for rep in range(cfg["teacher_rollouts"]):
             row = load_slot(pair["en"], rep, cfg, audit)
+            assert row["seed"] not in seeds
+            seeds.add(row["seed"])
             rewards.append(row["judgment"]["reward"])
+            votes[uid].append(row["judgment"]["selected"] if row["finish_reason"] == "stop" else None)
             total_tokens += row["output_tokens"]
             truncated += row["finish_reason"] == "length"
         groups[uid] = rewards
     save(RUN/"teacher_complete.json", dict(config_sha256=audit["config_sha256"],
-        prompt_sha256=audit["prompt_sha256"], model=cfg["teacher_model"], rewards=groups,
+        prompt_sha256=audit["prompt_sha256"], model=cfg["teacher_model"], rewards=groups, votes=votes,
         responses=sum(map(len, groups.values())), correct=sum(map(sum, groups.values())), truncated=truncated,
         output_tokens=total_tokens, completed_unix=time.time()))
 
@@ -125,7 +136,11 @@ def supervise():
         if not (RUN/"launch_request.json").exists():
             save(RUN/"launch_request.json", dict(unix=time.time(), config_sha256=audit["config_sha256"]))
         for attempt in range(4):
-            gpus = available_eval_gpus(range(cfg["maximum_concurrent_gpus"]))
+            if "sampling_gpu_pool" in cfg:
+                from weighted_hardware import sampling_cards
+                gpus = sampling_cards(cfg)
+            else:
+                gpus = available_eval_gpus(range(cfg["maximum_concurrent_gpus"]))
             save(RUN/f"teacher_assignment_{time.time_ns()}.json", dict(gpus=gpus, attempt=attempt, unix=time.time()))
             children = []
             try:

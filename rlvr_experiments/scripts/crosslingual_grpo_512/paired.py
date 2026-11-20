@@ -1,12 +1,15 @@
 """Verified native-language views of the frozen 512-question training cohort."""
 from collections import Counter
 import importlib.metadata
+import os
 import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[2]
 ROOT = PROJECT.parents[1]
-NAME = "formateval_priority512_xlang_kd_20261120"
+NAME = os.environ.get("RLVR_PAIRED_EXPERIMENT", "formateval_priority512_xlang_kd_20261120")
+if NAME not in {"formateval_priority512_xlang_kd_20261120","formateval_priority512_xlang_rank8_20261121"}:
+    raise ValueError(f"Unknown paired experiment: {NAME}")
 CONFIG = PROJECT / "configs" / f"{NAME}.json"
 RUN = PROJECT / "runs" / NAME
 OUT = ROOT / "finetuning/model/rl" / NAME
@@ -94,6 +97,25 @@ def preflight():
         prompt_protocol=cfg["prompt_protocol"], verifier=ANSWER_EXTRACTION_VERSION,
         think_open=ids["<think>"][0], think_close=ids["</think>"][0], eos=tok.eos_token_id,
         python=sys.executable, packages={k:importlib.metadata.version(k) for k in ("torch","vllm","transformers","peft")})
+    if "teacher_source" in cfg:
+        source_cfg = PROJECT/"configs"/(cfg["teacher_source"]+".json")
+        prior = read(source_cfg)
+        original = read(PROJECT/"runs"/cfg["teacher_source"]/"preflight.json")
+        assert sha(source_cfg) == cfg["teacher_source_sha256"] == original["config_sha256"]
+        settings = ("teacher_model","sampling_seed","teacher_seed_namespace","temperature","top_p","top_k",
+                    "max_new_tokens","max_model_len","choice_verifier_sha256","prompt_protocol","train_sha256")
+        assert all(cfg[k] == prior[k] for k in settings)
+        assert result["model_hashes"] == original["model_hashes"] and result["prompt_sha256"] == original["prompt_sha256"]
+        label_ids = {}
+        for uid,pair in paired.items():
+            prefix = pair["bo"]["prompt"] + cfg["rank_prefix"]
+            context = tok.encode(prefix,add_special_tokens=False)
+            assert context[:len(pair["bo"]["prompt_token_ids"])] == pair["bo"]["prompt_token_ids"]
+            for letter in "ABCD":
+                completed = tok.encode(prefix+letter,add_special_tokens=False)
+                assert completed[:-1] == context and label_ids.setdefault(letter,completed[-1]) == completed[-1]
+        assert len(set(label_ids.values())) == 4
+        result["rank_label_ids"] = label_ids
     save(RUN/"preflight.json", result)
     print(f"Verified {len(paired)} paired TRAIN questions, prompts, verifier and S0 shards.", flush=True)
 

@@ -133,7 +133,18 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
             p.wait(timeout=120)
         workers.clear()
     try:
-        if (run_dir/"launched.json").exists():
+        if base.get("shared_actor_gpus"):
+            from weighted_hardware import training_cards
+            if (run_dir/"complete.json").is_file():
+                launch_meta=read(run_dir/"launched.json")
+            else:
+                stage("selecting_shared_actor")
+                selected=training_cards(base)
+                prior=read(run_dir/"launched.json") if (run_dir/"launched.json").exists() else {}
+                launch_meta=dict(start_unix=prior.get("start_unix",time.time()),gpus=selected,python=sys.executable)
+                save(run_dir/"launched.json",launch_meta)
+                save(run_dir/f"gpu-assignment-{time.time_ns()}.json",launch_meta)
+        elif (run_dir/"launched.json").exists():
             launch_meta=read(run_dir/"launched.json")
             if custom_actor and not (run_dir/"complete.json").exists():
                 prior = launch_meta["gpus"]
@@ -165,6 +176,9 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
             save(run_dir/"launched.json",launch_meta)
         selected=launch_meta["gpus"]
         cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:base.get("eval_replicas", 2)],epochs=1)
+        if base.get("shared_actor_gpus"):
+            cfg["eval_gpus"] = selected[1:]
+            assert selected[0] in base["shared_actor_gpus"] and set(selected[1:])<=set(base["sampling_gpu_pool"])
         assert len(set(selected))==len(selected)<=base["maximum_concurrent_gpus"]
         if custom_actor:
             assert len(selected) == 4
@@ -172,7 +186,8 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
             assert (run_dir/"fork_contract.json").is_file()
         if not (run_dir/"complete.json").exists():
             stage("loading_sampling_replicas",gpus=selected)
-            assert set(selected)<=set(idle()),"Assigned GPUs now in use; recheck ownership before retry"
+            exclusive = selected[1:] if base.get("shared_actor_gpus") else selected
+            assert set(exclusive)<=set(idle()),"Sampling GPUs now in use; retry allocation"
             formal_actor = None
             if custom_actor:
                 # The actor restores concurrently so an assigned GPU is not left idle during sampler boot.
@@ -220,7 +235,11 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
         if not assessment.exists():
             eval_gpus = cfg["eval_gpus"]
             if custom_actor:
-                eval_gpus = available_eval_gpus(eval_gpus)
+                if base.get("shared_actor_gpus"):
+                    from weighted_hardware import sampling_cards
+                    eval_gpus = sampling_cards(base)
+                else:
+                    eval_gpus = available_eval_gpus(eval_gpus)
                 save(run_dir/"eval_gpu_assignment.json", dict(
                     preferred=cfg["eval_gpus"], gpus=eval_gpus, launch_unix=time.time()))
                 stage("evaluating_666DEV", gpus=eval_gpus)
