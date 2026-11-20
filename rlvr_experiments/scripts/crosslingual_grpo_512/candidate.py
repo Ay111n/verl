@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import time
 
 import torch
@@ -150,5 +152,7 @@ if __name__ == "__main__":
             preflight()
         collect_teacher()
         supervise(CONFIG,RUN,online_actor=Path(__file__).resolve())
+        report = ROOT/"benchmark/eval/analysis"/RUN.name/"summarize.py"
+        subprocess.run([sys.executable,str(report)], cwd=ROOT, check=True)
     else:
         train()
