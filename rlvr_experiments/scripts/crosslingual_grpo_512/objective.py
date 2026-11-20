@@ -60,7 +60,7 @@ def update(model, opt, params, cfg, state, ids, preds, data, english, audit, ter
     w = cfg["kd_weight"]
     grpo_loss = kd_loss = 0.
     max_mae = 0.
-    checked = active_tokens = 0
+    checked = active_tokens = clipped_tokens = 0
     head = model.get_base_model().lm_head
     assert not head.weight.requires_grad and head.bias is None and cfg["kd_temperature"] == 1.
     opt.zero_grad(set_to_none=True)
@@ -96,7 +96,11 @@ def update(model, opt, params, cfg, state, ids, preds, data, english, audit, ter
                 hidden = response_hidden(model,pred["prompt_token_ids"]+tokens[:lo],tokens[lo:hi])
             terms = []
             if adv:
-                term = online_loss(lp,lp.detach(),adv,cfg["clip"])/size
+                # A single update uses the exact pre-update likelihood for every rollout.
+                old_lp = lp.detach()
+                ratio = (lp.detach() - old_lp).exp()
+                clipped_tokens += ((ratio - 1).abs() > cfg["clip"]).sum().item()
+                term = online_loss(lp,old_lp,adv,cfg["clip"])/size
                 grpo_loss += term.detach().item()
                 active_tokens += len(tokens)
                 terms.append(term)
@@ -125,4 +129,4 @@ def update(model, opt, params, cfg, state, ids, preds, data, english, audit, ter
         prompt_tokens=sum(len(p["prompt_token_ids"]) for p in preds), optimizer_updated=active,
         loss=grpo_loss+w*kd_loss,grpo_loss=grpo_loss,kd_loss=kd_loss,kd_tokens=kd_tokens,
         kd_eligible=sum(g["kd_eligible"] for g in groups), raw_logprob_mae_max=max_mae,
-        likelihood_responses=checked, ppo_clip_fraction=0.0, update_seconds=time.monotonic()-start, **stats, **times)
+        likelihood_responses=checked, ppo_clip_fraction=clipped_tokens/max(active_tokens,1), update_seconds=time.monotonic()-start, **stats, **times)

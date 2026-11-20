@@ -86,3 +86,53 @@ def test_causal_alignment_and_gradients():
     expected = torch.autograd.grad(.1*reference/64,model.embed.weight)[0]
     torch.testing.assert_close(actual,expected)
     assert actual.norm() > 0 and teacher.grad is None and model.lm_head.weight.grad is None
+
+
+def test_single_optimizer_update_matches_two_dense_group_means(monkeypatch):
+    from contextlib import nullcontext
+    import objective
+
+    torch.manual_seed(31)
+    model = TinyCausal().double()
+    model.disable_adapter = nullcontext
+    params = list(model.embed.parameters())
+    opt = torch.optim.SGD(params, lr=.001)
+    cfg = dict(rollouts_per_question=4, verifier_version="multilingual-final-answer-v3",
+        max_new_tokens=8192, kd_weight=.1, kd_temperature=1., kd_chunk=2, head_chunk=2,
+        likelihood_temperature=.6, clip=.2)
+    audit = dict(think_open=18,think_close=19)
+    data, predictions, reference = {}, [], 0.
+    english = {"zero":[1,0,0,0],"mixed":[1,1,0,0]}
+    for uid in english:
+        bo,en = [3,6],[10,2,7]
+        view = dict(id=uid, domain="knowledge", option_labels=list("ABCD"), options_bo=dict(zip("ABCD","abcd")),
+                    canonical_answer="A",prompt="plain",prompt_token_ids=bo)
+        data[uid] = {"bo":view,"en":{"prompt_token_ids":en}}
+        for rep in range(4):
+            ok = uid=="mixed" and rep<2
+            tokens = [18,5,rep+2,19,14+int(ok)]
+            student = response_hidden(model,bo,tokens)
+            logits = model.lm_head(student).float()
+            target = torch.tensor(tokens)
+            raw = -F.cross_entropy(logits.detach(),target,reduction="none")
+            predictions.append(dict(id=uid,rollout_index=rep,seed=rep,prompt_token_ids=bo,response_token_ids=tokens,
+                raw_logprobs=raw.tolist(),finish_reason="stop",completion="<think>r</think> "+("A" if ok else "B")))
+            if uid=="mixed":
+                lp = -F.cross_entropy(logits/.6,target,reduction="none")
+                reference += -((lp-lp.detach()).exp()*(int(ok)-.5)).mean()/8
+            if uid=="zero":
+                teacher = response_hidden(model,en,tokens).detach()
+                pl = model.lm_head(student[1:3]).log_softmax(-1)
+                ql = model.lm_head(teacher[1:3]).log_softmax(-1)
+                reference += .1*(pl.exp()*(pl-ql)).sum(-1).mean()/8
+    expected = torch.autograd.grad(reference,params)[0]
+    snapshots = []
+    def finish(optimizer, parameters, config, version):
+        snapshots.append(parameters[0].grad.clone())
+        return dict(grad_norm=snapshots[-1].norm().item(),grad_clipped=False)
+    monkeypatch.setattr(objective,"finish_update",finish)
+    event = objective.update(model,opt,params,cfg,{"cursor":1,"policy":1},list(english),predictions,
+                             data,english,audit,{22},"test",{})
+    assert len(snapshots)==1 and event["optimizer_updated"] and event["kd_tokens"]==8
+    assert event["kd_eligible"]==1 and event["group_histogram"]==[1,0,1,0,0]
+    torch.testing.assert_close(snapshots[0],expected,rtol=2e-6,atol=1e-8)
