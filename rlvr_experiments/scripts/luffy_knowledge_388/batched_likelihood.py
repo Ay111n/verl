@@ -24,8 +24,18 @@ def response_logps_batch(model,prompts,responses,chunk_size=512,temperature=0.6,
     lengths=[len(r) for r in responses]
     target=torch.as_tensor([token for r in responses for token in r],device=device)
     assert hidden.shape[0]==target.numel()==sum(lengths)
+    result = response_token_logps(base.lm_head, hidden, target, chunk_size, temperature, return_raw)
+    if return_raw:
+        policy, raw = result
+        return list(policy.split(lengths)), list(raw.split(lengths))
+    return list(result.split(lengths))
+
+
+def response_token_logps(head, hidden, target, chunk_size, temperature, return_raw=False):
+    """Score pre-aligned causal states; a second loss may reuse their student forward."""
+    assert len(hidden) == len(target) > 0
     def token_ce(h,t):
-        logits=base.lm_head(h).float()
+        logits=head(h).float()
         policy=-F.cross_entropy(logits if temperature==1 else logits/temperature,t,reduction="none")
         if not return_raw:return policy
         with torch.no_grad():raw=-F.cross_entropy(logits.detach(),t,reduction="none") if temperature!=1 else policy.detach()
@@ -35,6 +45,6 @@ def response_logps_batch(model,prompts,responses,chunk_size=512,temperature=0.6,
         h=hidden[start:start+chunk_size];t=target[start:start+chunk_size]
         chunks.append(checkpoint(token_ce,h,t,use_reentrant=False) if torch.is_grad_enabled() else token_ce(h,t))
     if return_raw:
-        combined=torch.cat(chunks,dim=1)
-        return list(combined[0].split(lengths)),list(combined[1].detach().split(lengths))
-    return list(torch.cat(chunks).split(lengths))
+        combined = torch.cat(chunks, dim=1)
+        return combined[0], combined[1].detach()
+    return torch.cat(chunks)
