@@ -18,8 +18,8 @@ from rlvr.answer_verifier import verify_answer
 from scripts.luffy_math_pilot.common import adapter_hash, load_model, save
 
 
-def cached_group(ids, prompts, cfg, workers, tag, cp, digest, cursor, stage):
-    path=RUN/"rollouts"/f"{tag}.json.gz"
+def cached_group(ids, prompts, cfg, workers, tag, cp, digest, cursor, stage, *, run_dir=RUN):
+    path=run_dir/"rollouts"/f"{tag}.json.gz"
     if path.exists():
         with gzip.open(path,"rt",encoding="utf8") as f:
             entry=json.load(f)
@@ -37,27 +37,31 @@ def cached_group(ids, prompts, cfg, workers, tag, cp, digest, cursor, stage):
     return rows,times
 
 
-def train():
-    cfg=read(CONFIG)
+def train(config_path=CONFIG, run_dir=RUN, out_dir=OUT, *, auxiliary_update=None):
+    cfg=read(config_path)
     assert os.environ["CUDA_VISIBLE_DEVICES"]=="5"
-    gpu=read(RUN/"effective_training_config.json")
-    assert gpu["actor_gpu"]==5 and len(set(gpu["rollout_gpus"]))==2 and 5 not in gpu["rollout_gpus"]
-    audit=read(RUN/"preflight.json")
-    assert sha(CONFIG)==audit["config_sha256"] and sha(RUN/"prefixes.json")==audit["prefixes_sha256"]
-    assert sha(RUN/"training_prompts.json")==audit["prompt_file_sha256"]
-    data=read(RUN/"training_prompts.json")
-    refs=read(RUN/"prefixes.json")
+    gpu=read(run_dir/"effective_training_config.json")
+    assert gpu["actor_gpu"]==5 and len(set(gpu["rollout_gpus"]))==cfg["sampling_replicas"] and 5 not in gpu["rollout_gpus"]
+    audit=read(run_dir/"preflight.json")
+    assert sha(config_path)==audit["config_sha256"] and sha(run_dir/"prefixes.json")==audit["prefixes_sha256"]
+    assert sha(run_dir/"training_prompts.json")==audit["prompt_file_sha256"]
+    data=read(run_dir/"training_prompts.json")
+    refs=read(run_dir/"prefixes.json")
+    if auxiliary_update is not None:
+        assert sha(run_dir/"teacher_prompts.json") == audit["teacher_prompts_sha256"]
+        teacher_prompts = read(run_dir/"teacher_prompts.json")
+        assert teacher_prompts.keys() == refs.keys()
     keys=list(data)
     batches=[keys[i:i+16] for i in range(0,len(keys),16)]
     assert len(batches)==32 and all(len(b)==16 for b in batches)
-    workers=[RUN/"rpc_workers"/f"worker{i}" for i in range(2)]
+    workers=[run_dir/"rpc_workers"/f"worker{i}" for i in range(cfg["sampling_replicas"])]
     free,total=torch.cuda.mem_get_info()
     assert free>=cfg["actor_min_free_mib"]*1024**2
     cap=free-cfg["actor_reserve_mib"]*1024**2
     torch.cuda.set_per_process_memory_fraction(cap/total)
-    save(RUN/f"actor_memory_{os.getpid()}.json",dict(gpu=5,free=free,cap=cap))
-    OUT.mkdir(parents=True,exist_ok=True)
-    cps=snapshots(OUT)
+    save(run_dir/f"actor_memory_{os.getpid()}.json",dict(gpu=5,free=free,cap=cap))
+    out_dir.mkdir(parents=True,exist_ok=True)
+    cps=snapshots(out_dir)
     cp=cps[-1] if cps else None
     modelpath=ROOT/cfg["model_path"]
     model=load_model(str(modelpath),cfg["initial_seed"],adapter=str(cp) if cp else None,trainable_adapter=bool(cp))
@@ -67,17 +71,17 @@ def train():
     if cp:
         state,digest=restore(cp,model,opt,cfg)
         for c in cps:
-            if not (RUN/"steps"/(c.name+".json")).exists():
-                save(RUN/"steps"/(c.name+".json"),read(c/"event.json"))
+            if not (run_dir/"steps"/(c.name+".json")).exists():
+                save(run_dir/"steps"/(c.name+".json"),read(c/"event.json"))
     else:
         state=dict(tx=0,cursor=0,policy=0,online=0,nll=0,pending=[],due=[])
-        cp,digest,_=commit(OUT,RUN,model,opt,state,dict(kind="initial",s0=str(modelpath),initial_lora_sha256=adapter_hash(model)),cfg,modelpath)
+        cp,digest,_=commit(out_dir,run_dir,model,opt,state,dict(kind="initial",s0=str(modelpath),initial_lora_sha256=adapter_hash(model)),cfg,modelpath)
     assisted={uid:dict(data[uid],prompt_token_ids=v["prompt_token_ids"]) for uid,v in refs.items()}
     while state["cursor"]<len(batches):
         start=time.monotonic()
         index=state["cursor"];batch=batches[index];step=index+1
         tag=f"formal-b{step:03d}-v{state['policy']:03d}-{digest[:16]}"
-        plain,times=cached_group(batch,data,cfg,workers,tag,cp,digest,step,"formal")
+        plain,times=cached_group(batch,data,cfg,workers,tag,cp,digest,step,"formal",run_dir=run_dir)
         initial={}
         for pred in plain:
             uid=pred["id"];q=data[uid]
@@ -90,7 +94,7 @@ def train():
         chosen={(r["id"],r["rollout_index"]):r for r in plain}
         extra=[]
         if rescue:
-            extra,extra_times=cached_group(rescue,assisted,cfg,workers,tag+"-rescue",cp,digest,step,"prefix-rescue")
+            extra,extra_times=cached_group(rescue,assisted,cfg,workers,tag+"-rescue",cp,digest,step,"prefix-rescue",run_dir=run_dir)
             times=dict(times,rescue_timing=extra_times)
             for r in extra:
                 uid=r["id"]
@@ -98,7 +102,13 @@ def train():
                 # the real prefilled prompt IDs and the newly generated suffix IDs.
                 chosen[uid,r["rollout_index"]]=dict(r,completion=refs[uid]["forced"]+r["completion"])
         selected=[chosen[uid,i] for uid in batch for i in range(4)]
-        event=online(model,opt,params,cfg,state,batch,selected,data,tag,index==0,times)
+        args = (model,opt,params,cfg,state,batch,selected,data,tag,index==0,times)
+        if auxiliary_update is None:
+            event = online(*args)
+        else:
+            event = auxiliary_update(*args, plain=plain, initial=initial, rescue_ids=rescue,
+                teacher_prompts=teacher_prompts, think_open=audit["think_open"],
+                think_close=audit["think_close"], terminal=set(audit["terminal"]))
         for group in event["groups"]:
             uid=group["id"]; group["assisted"]=uid in rescue
             if uid not in rescue:
@@ -110,18 +120,21 @@ def train():
         if event["optimizer_updated"]:
             state["online"]+=1;state["policy"]+=1
         event.update(cursor=state["cursor"],online_step=state["online"],epoch=1)
-        cp,digest,write_sec=commit(OUT,RUN,model,opt,state,event,cfg,modelpath)
-        save(RUN/"timings"/f"{step:04d}.json",dict(checkpoint_seconds=write_sec,total_seconds=time.monotonic()-start,end_unix=time.time()))
+        cp,digest,write_sec=commit(out_dir,run_dir,model,opt,state,event,cfg,modelpath)
+        save(run_dir/"timings"/f"{step:04d}.json",dict(checkpoint_seconds=write_sec,total_seconds=time.monotonic()-start,end_unix=time.time()))
         print(f"Committed batch {step}/32; assisted {len(rescue)} of 16 questions.",flush=True)
     sync(workers,"final-"+digest[:16],cp,digest)
-    events=[read(RUN/"steps"/f"checkpoint-{i:04d}.json") for i in range(1,33)]
+    events=[read(run_dir/"steps"/f"checkpoint-{i:04d}.json") for i in range(1,33)]
     assert [g["id"] for e in events for g in e["groups"]]==keys
     rescued=sum(len(e["rescue_ids"]) for e in events)
     final=dict(state,epochs=1,adapter=str(cp),adapter_sha256=digest,question_visits=len(keys),
         online_responses=sum(e["independent_responses"] for e in events),assisted_responses=4*rescued,
         rescue_questions=rescued,eligible=len(refs),all_generated_responses=2048+4*rescued,
         output_tokens=sum(e["sampled_output_tokens"] for e in events))
-    save(OUT/"final.json",final);save(RUN/"complete.json",final)
+    if auxiliary_update is not None:
+        for key in ("kd_questions", "kd_eligible", "kd_responses", "kd_tokens"):
+            final[key] = sum(event[key] for event in events)
+    save(out_dir/"final.json",final);save(run_dir/"complete.json",final)
 
 
 if __name__=="__main__":

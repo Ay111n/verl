@@ -228,6 +228,17 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
         assert final["question_visits"] == expected_questions
         assert final["online_responses"] == expected_questions * base["rollouts_per_question"]
         assert not final["due"] and final["nll"]<=8 and sha(Path(final["adapter"])/"adapter_model.safetensors")==final["adapter_sha256"]
+        if base.get("paired_probe"):
+            probe_result = ROOT/"benchmark/eval/analysis"/base["name"]/"probe58_summary.json"
+            if not probe_result.exists():
+                from weighted_hardware import sampling_cards
+                probe_gpus = sampling_cards(base)
+                assert len(probe_gpus) == 1 and probe_gpus[0] not in base["shared_actor_gpus"]
+                stage("evaluating_fixed_58", gpus=probe_gpus)
+                proc = launch([ROOT/base["paired_probe"], "run", "--gpu", str(probe_gpus[0])],
+                              probe_gpus, run_dir/"probe58.log")
+                if proc.wait() != 0 or not probe_result.is_file():
+                    raise RuntimeError("The paired unhinted assessment did not finish")
         stage("evaluating_666DEV",gpus=cfg["eval_gpus"])
         if not (run_dir/"evaluation_started.json").exists():
             save(run_dir/"evaluation_started.json",dict(unix=time.time()))
