@@ -8,7 +8,8 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[2]
 ROOT = PROJECT.parents[1]
 NAME = os.environ.get("RLVR_PAIRED_EXPERIMENT", "formateval_priority512_xlang_kd_20261120")
-if NAME not in {"formateval_priority512_xlang_kd_20261120","formateval_priority512_xlang_rank8_20261121"}:
+if NAME not in {"formateval_priority512_xlang_kd_20261120","formateval_priority512_xlang_rank8_20261121",
+                "formateval_priority512_restate_20261121"}:
     raise ValueError(f"Unknown paired experiment: {NAME}")
 CONFIG = PROJECT / "configs" / f"{NAME}.json"
 RUN = PROJECT / "runs" / NAME

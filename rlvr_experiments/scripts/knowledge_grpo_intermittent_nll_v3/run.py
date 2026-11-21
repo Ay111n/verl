@@ -175,7 +175,7 @@ def supervise(config_path=CONFIG, run_dir=RUN, *, fork_actor=None, online_actor=
             launch_meta=dict(start_unix=time.time(),gpus=available,python=sys.executable)
             save(run_dir/"launched.json",launch_meta)
         selected=launch_meta["gpus"]
-        cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:base.get("eval_replicas", 2)],epochs=1)
+        cfg=dict(base,actor_gpu=selected[0],rollout_gpus=selected[1:],eval_gpus=selected[:base.get("eval_replicas", 2)],epochs=base.get("epochs",1))
         if base.get("shared_actor_gpus"):
             cfg["eval_gpus"] = selected[1:]
             assert selected[0] in base["shared_actor_gpus"] and set(selected[1:])<=set(base["sampling_gpu_pool"])
