@@ -22,8 +22,8 @@ from scripts.opd_math_ab.common import response_hidden, reverse_kl
 from teacher import supervise as collect_teacher
 
 
-def save_responses(cursor, version, digest, predictions, groups, data):
-    directory = RUN/"responses"
+def save_responses(cursor, version, digest, predictions, groups, data, run=RUN):
+    directory = run/"responses"
     directory.mkdir(exist_ok=True)
     dest = directory/f"batch-{cursor:04d}.jsonl.gz"
     tmp = dest.with_suffix(".tmp")

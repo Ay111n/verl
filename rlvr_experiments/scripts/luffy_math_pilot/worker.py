@@ -49,8 +49,9 @@ def main():
                     continue
                 params=[]
                 for row in r["prompts"]:
-                    assert len(row["prompt_token_ids"])+r["max_new_tokens"]<=32768
-                    params.append(SamplingParams(max_tokens=r["max_new_tokens"],temperature=r["temperature"],
+                    budget = row.get("max_new_tokens", r["max_new_tokens"])
+                    assert 0 < budget <= r["max_new_tokens"] and len(row["prompt_token_ids"])+budget<=32768
+                    params.append(SamplingParams(max_tokens=budget,temperature=r["temperature"],
                         top_p=r["top_p"],top_k=r["top_k"],seed=row["seed"],skip_special_tokens=False,
                         logprobs=0 if r.get("return_logprobs",False) else None))
                 outs=llm.generate([{"prompt_token_ids":x["prompt_token_ids"]} for x in r["prompts"]],

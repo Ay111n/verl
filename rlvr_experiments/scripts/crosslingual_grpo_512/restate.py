@@ -45,7 +45,7 @@ def prepare(data, tok, cfg):
     return targets,[q[i:i+32] for q in (order,second) for i in range(0,len(q),32)]
 
 
-def update(model,opt,params,cfg,state,batch,preds,bo,targets,visit):
+def update(model,opt,params,cfg,state,batch,preds,bo,targets,visit,prefix_weights=None):
     start=time.monotonic(); n=cfg["rollouts_per_question"]; size=len(preds)
     assert size==len(batch)*n==128 and n==4
     groups=[];items=[];hist=[0]*5
@@ -69,15 +69,18 @@ def update(model,opt,params,cfg,state,batch,preds,bo,targets,visit):
         loss=online_loss(lp[0],lp[0].detach(),a,cfg["clip"])/size
         loss.backward();grpo+=loss.detach().item();active_rollouts+=1
         del lp,raw,loss
-    if visit==1:
+    if visit==1 or prefix_weights is not None:
         for g in groups:
+            weight = 1.0 if prefix_weights is None else prefix_weights.get(g["id"], 0.0)
+            if weight == 0:
+                continue
             x,y=targets[g["id"]]
             logps=response_logps_batch(model,[x],[y],cfg["head_chunk"],cfg["restate_temperature"])[0]
             assert len(logps)==len(y)
             per_question=-logps.mean()
-            (cfg["restate_weight"]*per_question/len(batch)).backward()
+            (cfg["restate_weight"]*weight*per_question/len(batch)).backward()
             g["english_body_nll"]=per_question.detach().item();g["target_tokens"]=len(y)
-            nll+=g["english_body_nll"]/len(batch);target_tokens+=len(y)
+            nll+=weight*g["english_body_nll"]/len(batch);target_tokens+=len(y)
             del logps,per_question
     active=bool(active_rollouts or target_tokens)
     stats=finish_update(opt,params,cfg,state["policy"]) if active else dict(grad_norm=0.,grad_clipped=False)
