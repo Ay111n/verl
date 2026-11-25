@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import random
+import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 
@@ -16,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]
 ROOT = PROJECT.parents[1]
 sys.path.insert(0, str(PROJECT / "scripts/knowledge_grpo_intermittent_nll_v3"))
-from checkpointing import commit, restore, snapshots
+from checkpointing import commit, restore
 from contract import read, text_sha, advantages, student_reward
 from sampling import generate, sync
 from train import finish_update
@@ -139,7 +141,27 @@ def update(model, optimizer, params, cfg, state, ids, pred, data, times):
                 **stats, **times)
 
 
-def train(cfg, actor_gpu):
+def recovery_points(out):
+    return sorted(p for p in out.glob("checkpoint-[0-9][0-9][0-9][0-9]") if p.is_dir())
+
+
+def publish_rollout_adapter(model, out):
+    target = out / "rollout_adapter"
+    target.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out, prefix=".rollout-") as staging:
+        staged = Path(staging)
+        model.save_pretrained(staged, safe_serialization=True)
+        digest = sha(staged / "adapter_model.safetensors")
+        for name in ("adapter_config.json", "adapter_model.safetensors"):
+            (staged / name).replace(target / name)
+    return target, digest
+
+
+def sampling_lane(session, index):
+    return RUN / "rpc_workers" / session / f"worker{index}"
+
+
+def train(cfg, actor_gpu, session):
     import torch
     assert os.environ["CUDA_VISIBLE_DEVICES"] == str(actor_gpu)
     free, total = torch.cuda.mem_get_info()
@@ -157,27 +179,38 @@ def train(cfg, actor_gpu):
     size = cfg["batch_size"]
     batches = [order[i:i+size] for order in orders for i in range(0, len(order), size)]
     assert len(batches) == 64 and all(len(batch) == 16 for batch in batches)
+    cadence, keep = cfg["checkpoint_every_updates"], cfg["checkpoints_to_keep"]
+    assert cadence > 0 and keep > 0 and len(batches) % cadence == 0
     save(RUN/"training_plan.json", dict(ordered_batches=batches, train_sha256=cfg["train_sha256"]))
     OUT.mkdir(parents=True, exist_ok=True)
     base = ROOT/cfg["model_path"]
-    existing = snapshots(OUT)
-    last = existing[-1] if existing else None
-    model = load_model(str(base), cfg["initial_seed"], adapter=str(last) if last else None, trainable_adapter=bool(last),
+    existing = recovery_points(OUT)
+    recovery = existing[-1] if existing else None
+    model = load_model(str(base), cfg["initial_seed"], adapter=str(recovery) if recovery else None, trainable_adapter=bool(recovery),
                        lora_rank=cfg["lora_rank"], lora_alpha=cfg["lora_alpha"])
     lora = model.peft_config["default"]
     assert (lora.r, lora.lora_alpha) == (32,64)
     params = [p for p in model.parameters() if p.requires_grad]
     assert params and all(p.dtype == torch.float32 for p in params)
     opt = torch.optim.AdamW(params, lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"])
-    if last:
-        state, digest = restore(last, model, opt, cfg)
-        if not (RUN/"steps"/f"{last.name}.json").exists():
-            save(RUN/"steps"/f"{last.name}.json", read(last/"event.json"))
+    if recovery:
+        state, digest = restore(recovery, model, opt, cfg)
+        assert state["tx"] == state["cursor"] and state["tx"] % cadence == 0
+        if not (RUN/"steps"/f"{recovery.name}.json").exists():
+            save(RUN/"steps"/f"{recovery.name}.json", read(recovery/"event.json"))
+        last = recovery
     else:
         state = dict(tx=0, cursor=0, policy=0, online=0, nll=0, pending=[], due=[])
-        last, digest, _ = commit(OUT,RUN,model,opt,state,dict(kind="initial",initial_lora_sha256=adapter_hash(model),
-            parameters=sum(p.numel() for p in params),actor_mem_cap=cap),cfg,base)
-    lanes = [RUN/"rpc_workers"/f"worker{i}" for i in range(2)]
+        last, digest = publish_rollout_adapter(model, OUT)
+        save(RUN/"initialization.json", dict(base_step=9339, training_updates=0, seed=cfg["initial_seed"],
+            initial_lora_sha256=adapter_hash(model), sampler_adapter_sha256=digest,
+            parameters=sum(p.numel() for p in params), actor_gpu=actor_gpu, actor_mem_cap=cap))
+    for event_file in (RUN/"steps").glob("checkpoint-[0-9][0-9][0-9][0-9].json"):
+        if int(event_file.stem.removeprefix("checkpoint-")) > state["cursor"]:
+            event_file.unlink()
+    save(RUN/"progress.json", dict(updates=state["cursor"], recovery=str(recovery) if recovery else None,
+         adapter_sha256=digest, actor_gpu=actor_gpu, sampling_session=session))
+    lanes = [sampling_lane(session, i) for i in range(2)]
     while state["cursor"] < len(batches):
         cursor = state["cursor"]
         tag = f"b{cursor+1:03d}-v{state['policy']:03d}-{digest[:16]}"
@@ -187,18 +220,33 @@ def train(cfg, actor_gpu):
         del p
         for key in ("cursor","tx","policy","online"):
             state[key] += 1
-        event.update(epoch=cursor//32+1, batch=cursor+1, input_adapter_sha256=digest)
-        last,digest,_ = commit(OUT,RUN,model,opt,state,event,cfg,base)
+        event.update(epoch=cursor//32+1, batch=cursor+1, input_adapter_sha256=digest, sampling_session=session)
+        if state["tx"] % cadence == 0:
+            last, digest, _ = commit(OUT, RUN, model, opt, state, event, cfg, base)
+            recovery = last
+            for outdated in recovery_points(OUT)[:-keep]:
+                shutil.rmtree(outdated)
+        else:
+            last, digest = publish_rollout_adapter(model, OUT)
+            save(RUN/"steps"/f'checkpoint-{state["tx"]:04d}.json',
+                 dict(event, tx=state["tx"], policy_version=state["policy"], output_adapter_sha256=digest))
         assert digest != event["input_adapter_sha256"]
+        save(RUN/"progress.json", dict(updates=state["cursor"], recovery=str(recovery) if recovery else None,
+             adapter_sha256=digest, actor_gpu=actor_gpu, sampling_session=session))
         print(f"Batch {cursor+1}/64: {event['group_histogram']}, KL={event['sampled_kl']:.7g}, "
               f"peak_reserved={event['peak_reserved_bytes']/1024**3:.2f} GiB", flush=True)
-    sync(lanes,f"final-{digest[:16]}",last,digest)
+    assert recovery == last and last.name == "checkpoint-0064"
+    sync(lanes, f"final-{digest[:16]}", last, digest)
+    working_adapter = OUT / "rollout_adapter"
+    if working_adapter.exists():
+        shutil.rmtree(working_adapter)
     events = [read(RUN/"steps"/f"checkpoint-{i:04d}.json") for i in range(1,65)]
     assert [g["id"] for e in events for g in e["groups"]] == first + second
     assert sum(e["online_responses"] for e in events) == 8192
     assert len({(g["id"], j["seed"]) for e in events for g in e["groups"] for j in g["judgments"]}) == 8192
     save(RUN/"complete.json",dict(state,epochs=2,batches=64,question_visits=1024,online_responses=8192,
          train_sha256=cfg["train_sha256"],adapter=str(last),adapter_sha256=digest,
+         checkpoint_every_updates=cadence, retained_checkpoints=[p.name for p in recovery_points(OUT)],
          output_tokens=sum(e["output_tokens"] for e in events),truncated=sum(e["truncated"] for e in events)))
 
 
@@ -246,23 +294,25 @@ def pipeline(cfg, actor_gpu, sampling_gpus):
             gpus = devices(cfg, actor_gpu, sampling_gpus, True)
             stage("loading_training", gpus=gpus)
             save(RUN/"effective_training_config.json", cfg)
+            session = f"attempt-{time.time_ns()}"
             assigned = RUN/"training_gpus.json"
             history = RUN/"training_gpu_history.json"
             previous = read(history) if history.exists() else [read(assigned)] if assigned.exists() else []
             latest = RUN/"latest.json"
             checkpoint = read(latest) if latest.exists() else None
-            assignment = dict(actor=gpus[0], sampling=gpus[1:], unix=time.time(),
+            assignment = dict(actor=gpus[0], sampling=gpus[1:], unix=time.time(), sampling_session=session,
                               from_checkpoint=checkpoint["checkpoint"] if checkpoint else None,
                               from_adapter_sha256=checkpoint["adapter_sha256"] if checkpoint else None)
             save(history, [*previous, assignment])
             save(assigned, assignment)
             workers = []
             for i,gpu in enumerate(gpus[1:]):
-                lane = RUN/"rpc_workers"/f"worker{i}"
+                lane = sampling_lane(session, i)
                 worker = launch([PROJECT/"scripts/luffy_math_pilot/worker.py","--model",ROOT/cfg["model_path"],
                     "--rpc",lane,"--max-lora-rank",32],[gpu],f"worker{i}.log",True)
                 workers.append((worker,lane))
-            actor = launch([Path(__file__), "train", "--actor-gpu", actor_gpu], gpus[:1], "train.log", True)
+            actor = launch([Path(__file__), "train", "--actor-gpu", actor_gpu, "--sampling-session", session],
+                           gpus[:1], "train.log", True)
             stage("training",gpus=gpus,batches=64)
             while actor.poll() is None:
                 if any(worker.poll() is not None for worker,_ in workers):
@@ -327,21 +377,25 @@ def main():
     ap.add_argument("stage", choices=("preflight", "run", "train"))
     ap.add_argument("--actor-gpu", type=int, help="Physical GPU index for updates")
     ap.add_argument("--sampling-gpus", type=int, nargs=2, help="Reuse these GPUs for sampling and final evaluation")
+    ap.add_argument("--sampling-session", help=argparse.SUPPRESS)
     a = ap.parse_args()
     cfg = read(CONFIG)
     actor_gpu = cfg["actor_gpu"] if a.actor_gpu is None else a.actor_gpu
-    if a.sampling_gpus and len(set([actor_gpu, *a.sampling_gpus])) != 3:
+    sampling_gpus = a.sampling_gpus or cfg["sampling_gpus"]
+    if len(set([actor_gpu, *sampling_gpus])) != 3:
         ap.error("the actor and the two sampling GPUs must be distinct")
     RUN.mkdir(parents=True, exist_ok=True)
     if a.stage == "train":
-        train(cfg, actor_gpu)
+        if not a.sampling_session or not a.sampling_session.removeprefix("attempt-").isdigit():
+            ap.error("launch training through the run stage")
+        train(cfg, actor_gpu, a.sampling_session)
     else:
         with (RUN/"controller.lock").open("a") as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             if a.stage == "preflight":
                 preflight(cfg)
             elif not (RUN/"pipeline_complete.json").exists():
-                pipeline(cfg, actor_gpu, a.sampling_gpus)
+                pipeline(cfg, actor_gpu, sampling_gpus)
 
 
 if __name__ == "__main__":
