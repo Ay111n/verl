@@ -139,12 +139,12 @@ def update(model, optimizer, params, cfg, state, ids, pred, data, times):
                 **stats, **times)
 
 
-def train(cfg):
+def train(cfg, actor_gpu):
     import torch
-    assert os.environ["CUDA_VISIBLE_DEVICES"] == str(cfg["actor_gpu"]) == "5"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == str(actor_gpu)
     free, total = torch.cuda.mem_get_info()
     cap = free - 3072 * 1024**2
-    assert cap >= 24000 * 1024**2, f"GPU 5 free memory changed: {free/1024**2:.0f} MiB"
+    assert cap >= 24000 * 1024**2, f"GPU {actor_gpu} free memory changed: {free/1024**2:.0f} MiB"
     torch.cuda.set_per_process_memory_fraction(cap / total)
     pre = read(RUN / "preflight.json")
     assert sha(CONFIG) == pre["config_sha256"] and sha(RUN/"training_prompts.json") == pre["prompts_sha256"]
@@ -202,22 +202,24 @@ def train(cfg):
          output_tokens=sum(e["output_tokens"] for e in events),truncated=sum(e["truncated"] for e in events)))
 
 
-def devices(cfg, training):
+def devices(cfg, actor_gpu, sampling_gpus, training):
     while True:
         first = inventory()
         time.sleep(3)
         second = inventory()
         idle = [i for i in sorted(first) if all(m[i][1]<128 and m[i][3]<5 for m in (first,second))]
-        if not training and len(idle) >= cfg["eval_replicas"]:
-            return idle[:cfg["eval_replicas"]]
-        actor = cfg["actor_gpu"]
-        lanes = [i for i in idle if i != actor]
-        if training and len(lanes) >= 2 and min(first[actor][2],second[actor][2]) >= 27072:
-            return [actor,*lanes[:2]]
+        if not training:
+            eval_pool = sampling_gpus if sampling_gpus else idle
+            if len(eval_pool) >= cfg["eval_replicas"] and all(i in idle for i in eval_pool[:cfg["eval_replicas"]]):
+                return eval_pool[:cfg["eval_replicas"]]
+        else:
+            lanes = sampling_gpus if sampling_gpus else [i for i in idle if i != actor_gpu]
+            if len(lanes) >= 2 and all(i in idle for i in lanes[:2]) and min(first[actor_gpu][2],second[actor_gpu][2]) >= 27072:
+                return [actor_gpu, *lanes[:2]]
         time.sleep(20)
 
 
-def pipeline(cfg):
+def pipeline(cfg, actor_gpu, sampling_gpus):
     from concurrent.futures import ThreadPoolExecutor
     from scripts.luffy_math_pilot.common import rpc
     active = []
@@ -240,18 +242,27 @@ def pipeline(cfg):
             stage("preflight")
             preflight(cfg)
         if not (RUN/"complete.json").exists():
-            stage("waiting_for_training_gpus",actor_gpu=5,min_free_mib=27072)
-            gpus = devices(cfg,True)
-            stage("loading_training",gpus=gpus)
-            save(RUN/"effective_training_config.json",cfg)
-            save(RUN/"training_gpus.json",dict(actor=gpus[0],sampling=gpus[1:],unix=time.time()))
+            stage("waiting_for_training_gpus", actor_gpu=actor_gpu, sampling_gpus=sampling_gpus, min_free_mib=27072)
+            gpus = devices(cfg, actor_gpu, sampling_gpus, True)
+            stage("loading_training", gpus=gpus)
+            save(RUN/"effective_training_config.json", cfg)
+            assigned = RUN/"training_gpus.json"
+            history = RUN/"training_gpu_history.json"
+            previous = read(history) if history.exists() else [read(assigned)] if assigned.exists() else []
+            latest = RUN/"latest.json"
+            checkpoint = read(latest) if latest.exists() else None
+            assignment = dict(actor=gpus[0], sampling=gpus[1:], unix=time.time(),
+                              from_checkpoint=checkpoint["checkpoint"] if checkpoint else None,
+                              from_adapter_sha256=checkpoint["adapter_sha256"] if checkpoint else None)
+            save(history, [*previous, assignment])
+            save(assigned, assignment)
             workers = []
             for i,gpu in enumerate(gpus[1:]):
                 lane = RUN/"rpc_workers"/f"worker{i}"
                 worker = launch([PROJECT/"scripts/luffy_math_pilot/worker.py","--model",ROOT/cfg["model_path"],
                     "--rpc",lane,"--max-lora-rank",32],[gpu],f"worker{i}.log",True)
                 workers.append((worker,lane))
-            actor = launch([Path(__file__),"train"],gpus[:1],"train.log",True)
+            actor = launch([Path(__file__), "train", "--actor-gpu", actor_gpu], gpus[:1], "train.log", True)
             stage("training",gpus=gpus,batches=64)
             while actor.poll() is None:
                 if any(worker.poll() is not None for worker,_ in workers):
@@ -285,8 +296,8 @@ def pipeline(cfg):
         assert read(merged/"merge_manifest.json")["adapter_sha256"] == final["adapter_sha256"]
         analysis = ROOT/"benchmark/eval/analysis"/NAME
         if not (analysis/"candidate_result.json").exists():
-            stage("waiting_for_eval_gpus")
-            eval_cards = devices(cfg,False)
+            stage("waiting_for_eval_gpus", sampling_gpus=sampling_gpus)
+            eval_cards = devices(cfg, actor_gpu, sampling_gpus, False)
             save(RUN/"eval_gpu_assignment.json",dict(gpus=eval_cards,unix=time.time()))
             stage("evaluating_666DEV",gpus=eval_cards)
             launch([ROOT/cfg["eval_entrypoint"],"--model",merged,"--arm","candidate",
@@ -313,19 +324,24 @@ def pipeline(cfg):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage",choices=("preflight","run","train"))
+    ap.add_argument("stage", choices=("preflight", "run", "train"))
+    ap.add_argument("--actor-gpu", type=int, help="Physical GPU index for updates")
+    ap.add_argument("--sampling-gpus", type=int, nargs=2, help="Reuse these GPUs for sampling and final evaluation")
     a = ap.parse_args()
     cfg = read(CONFIG)
-    RUN.mkdir(parents=True,exist_ok=True)
+    actor_gpu = cfg["actor_gpu"] if a.actor_gpu is None else a.actor_gpu
+    if a.sampling_gpus and len(set([actor_gpu, *a.sampling_gpus])) != 3:
+        ap.error("the actor and the two sampling GPUs must be distinct")
+    RUN.mkdir(parents=True, exist_ok=True)
     if a.stage == "train":
-        train(cfg)
+        train(cfg, actor_gpu)
     else:
         with (RUN/"controller.lock").open("a") as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             if a.stage == "preflight":
                 preflight(cfg)
             elif not (RUN/"pipeline_complete.json").exists():
-                pipeline(cfg)
+                pipeline(cfg, actor_gpu, a.sampling_gpus)
 
 
 if __name__ == "__main__":
