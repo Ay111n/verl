@@ -6,6 +6,7 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--model",required=True);ap.add_argument("--rpc",type=Path,required=True)
     ap.add_argument("--max-num-seqs",type=int,default=16)
+    ap.add_argument("--max-lora-rank",type=int,default=16)
     a=ap.parse_args();assert len(os.environ["CUDA_VISIBLE_DEVICES"].split(","))==1
     a.rpc.mkdir(parents=True,exist_ok=True)
     from vllm import LLM,SamplingParams
@@ -13,7 +14,7 @@ def main():
     llm=LLM(model=a.model,dtype="bfloat16",tensor_parallel_size=1,max_model_len=32768,
         gpu_memory_utilization=.90,max_num_seqs=a.max_num_seqs,max_num_batched_tokens=2048,
         enable_prefix_caching=False,enable_chunked_prefill=True,safetensors_load_strategy="eager",
-        generation_config="vllm",enable_lora=True,max_lora_rank=16,max_cpu_loras=2,logprobs_mode="raw_logprobs")
+        generation_config="vllm",enable_lora=True,max_lora_rank=a.max_lora_rank,max_cpu_loras=2,logprobs_mode="raw_logprobs")
     save(a.rpc/"ready.json",{"pid":os.getpid(),"gpu":os.environ["CUDA_VISIBLE_DEVICES"],
         "model":a.model,"max_num_seqs":a.max_num_seqs,"max_model_len":32768})
     active=None;version=1000

@@ -27,7 +27,7 @@ def sha(path):
 def object_sha(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
-def load_model(path, seed=42, adapter=None, trainable_adapter=False):
+def load_model(path, seed=42, adapter=None, trainable_adapter=False, *, lora_rank=16, lora_alpha=32):
     from transformers import AutoModelForCausalLM
     from peft import LoraConfig, get_peft_model, PeftModel
     random.seed(seed);torch.manual_seed(seed);torch.cuda.manual_seed_all(seed)
@@ -38,7 +38,7 @@ def load_model(path, seed=42, adapter=None, trainable_adapter=False):
     if adapter:
         model=PeftModel.from_pretrained(model,adapter,is_trainable=trainable_adapter)
     else:
-        model=get_peft_model(model,LoraConfig(r=16,lora_alpha=32,lora_dropout=0.,
+        model=get_peft_model(model,LoraConfig(r=lora_rank,lora_alpha=lora_alpha,lora_dropout=0.,
             target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
             bias="none",task_type="CAUSAL_LM"))
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant":False})
